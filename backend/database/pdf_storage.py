@@ -28,10 +28,14 @@ except ImportError:
 # Report PDFs are kept on this computer under storage/reports/<kind>/ (REPORTS_DIR overrides the folder).
 # The database stores each path relative to that folder, such as "live/live-605837b20f.pdf".
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-REPORTS_DIR = Path(os.getenv("REPORTS_DIR") or BACKEND_DIR / "storage" / "reports")
+default_reports = Path("/tmp/storage/reports") if os.getenv("VERCEL") else (BACKEND_DIR / "storage" / "reports")
+REPORTS_DIR = Path(os.getenv("REPORTS_DIR") or default_reports)
 PDF_DIR = REPORTS_DIR
 for _kind in ("certify", "live"):
-    (REPORTS_DIR / _kind).mkdir(parents=True, exist_ok=True)
+    try:
+        (REPORTS_DIR / _kind).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
 
 def _clean_id(audit_id: Any) -> str:
