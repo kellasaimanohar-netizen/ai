@@ -76,7 +76,7 @@ def test_secrets_are_masked_and_placeholders_ignored(repo):
 def test_repo_must_be_a_real_local_folder_inside_the_allowed_base(tmp_path, monkeypatch):
     monkeypatch.setenv("AA_REPO_BASE", str(tmp_path))
     assert scans.scan_repo("")["error"]
-    assert "GitHub" in scans.scan_repo("https://github.com/x/y")["error"]
+    assert "clone" in scans.scan_repo("https://github.com/x/y")["error"].lower()
     assert "not found" in scans.scan_repo(str(tmp_path / "missing"))["error"]
     outside = tmp_path.parent
     assert "must be inside" in scans.scan_repo(str(outside))["error"]

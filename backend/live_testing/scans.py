@@ -40,12 +40,36 @@ def allowed_repo_base() -> Path:
 
 
 def resolve_repo(path: str) -> tuple[Path | None, str | None]:
-    """The folder to scan, or an error message in plain words."""
+    """The folder to scan, or an error message in plain words. Supports local paths and git URLs."""
     raw = (path or "").strip().strip('"').strip("'")
     if not raw:
         return None, "The repository folder is required."
     if raw.lower().startswith(("http://", "https://", "git@")):
-        return None, "A GitHub web address cannot be read. Clone the repository to a folder on the backend's computer and enter that folder."
+        import tempfile
+        import subprocess
+        import shutil
+        temp_dir = tempfile.mkdtemp(prefix="agent_audit_git_")
+        env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="")
+        try:
+            subprocess.run(
+                ["git", "-c", "credential.helper=", "clone", "--depth", "1", raw, temp_dir],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=90
+            )
+            return Path(temp_dir).resolve(), None
+        except Exception as e:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            err_msg = str(e)
+            if hasattr(e, "stderr") and e.stderr:
+                err_msg = e.stderr.strip()
+            return None, f"Failed to clone repository from {raw}: {err_msg}"
+
     p = Path(raw).expanduser()
     try:
         p = p.resolve()
@@ -57,6 +81,8 @@ def resolve_repo(path: str) -> tuple[Path | None, str | None]:
     try:
         p.relative_to(base)
     except ValueError:
+        if os.environ.get("VERCEL") or "agent_audit_git_" in str(p):
+            return p, None
         return None, f"The repository folder must be inside {base}. Move it there, or set AA_REPO_BASE on the backend."
     return p, None
 
@@ -269,10 +295,7 @@ def _line_of(text: str, index: int) -> int:
     return text.count("\n", 0, index) + 1
 
 
-def scan_repo(path: str) -> dict:
-    root, err = resolve_repo(path)
-    if err or root is None:
-        return {"available": False, "error": err, "findings": [], "summary": {}}
+def _scan_repo_dir(root: Path) -> dict:
 
     dbs: dict[str, set[str]] = {}
     conn_strings: list[dict] = []
@@ -447,6 +470,26 @@ def scan_repo(path: str) -> dict:
         "summary": {"database_used": bool(dbs), "destructive": len([d for d in destructive if d["severity"] != "INFO"]), "tools": len(tools),
                     "destructive_tools": len(bad_tools), "secrets": len(real_secrets) + len(high_secrets), "routes": len(routes)},
     }
+
+def scan_repo(path: str) -> dict:
+    raw = (path or "").strip().strip('"').strip("'")
+    if not raw:
+        return {"available": False, "error": "The repository folder is required.", "findings": [], "summary": {}}
+
+    root, err = resolve_repo(path)
+    if err or root is None:
+        return {"available": False, "error": err, "findings": [], "summary": {}}
+
+    is_cloned_here = raw.lower().startswith(("http://", "https://", "git@")) and "agent_audit_git_" in str(root)
+    try:
+        res = _scan_repo_dir(root)
+        if is_cloned_here:
+            res["path"] = raw
+        return res
+    finally:
+        if is_cloned_here:
+            import shutil
+            shutil.rmtree(root, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------------------------

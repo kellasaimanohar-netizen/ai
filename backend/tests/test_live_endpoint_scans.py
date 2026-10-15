@@ -101,7 +101,7 @@ def test_github_address_is_rejected_with_a_clear_message(env):
     _tmp, url = env
     with pytest.raises(HTTPException) as e:
         _run(api.LiveAgentTestRequest(openapi_url=url + "/openapi.json", repo_path="https://github.com/a/b"))
-    assert "Clone" in e.value.detail
+    assert "clone" in e.value.detail.lower()
 
 
 def test_clean_repo_keeps_the_live_result_and_attaches_both_scans(env):
@@ -127,3 +127,34 @@ def test_a_hardcoded_secret_blocks_certification(env):
     assert data["tier"] == "NOT_CERTIFIED" and data["trust_score"] <= 58.0
     assert any(f["category"] == "Hardcoded secrets" for f in data["all_findings"])
     assert "abcdefghijklmnopqrstuvwxyz123456" not in json.dumps(data)
+
+
+def test_git_repo_cloning_and_cleanup(env, monkeypatch):
+    import shutil
+    import subprocess
+    tmp, url = env
+    origin_repo = tmp / "origin"
+    origin_repo.mkdir()
+    (origin_repo / "app.py").write_text("def ping(): return 'pong'\n")
+
+    orig_run = subprocess.run
+    created_temp_dirs = []
+
+    def fake_subprocess_run(cmd, *a, **kw):
+        if len(cmd) > 1 and cmd[0] == "git" and "clone" in cmd:
+            dest = cmd[-1]
+            created_temp_dirs.append(dest)
+            shutil.copytree(str(origin_repo), dest, dirs_exist_ok=True)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return orig_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    git_url = "https://github.com/my-org/my-agent.git"
+    data = _run(api.LiveAgentTestRequest(openapi_url=url + "/openapi.json", repo_path=git_url, agent_type="api"))["data"]
+
+    assert len(created_temp_dirs) == 1
+    temp_dir = created_temp_dirs[0]
+    assert not Path(temp_dir).exists()
+    assert data["repo_path"] == git_url
+    assert data["security_scan"]["repo"]["available"]
+

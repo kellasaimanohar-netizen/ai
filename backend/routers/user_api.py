@@ -1158,40 +1158,46 @@ async def discover_live_agent(req: LiveDiscoverRequest, current_user: dict = Dep
         if repo_err:
             raise HTTPException(status_code=400, detail=repo_err)
 
-        # Scan for manifest files
-        manifest_files = list(rp.glob("*.yaml")) + list(rp.glob("*.yml"))
-        manifest_files = [f for f in manifest_files if f.name.lower() not in ("render.yaml", "render.yml", "docker-compose.yaml", "docker-compose.yml")]
+        is_temp = rp is not None and "agent_audit_git_" in str(rp)
+        try:
+            # Scan for manifest files
+            manifest_files = list(rp.glob("*.yaml")) + list(rp.glob("*.yml"))
+            manifest_files = [f for f in manifest_files if f.name.lower() not in ("render.yaml", "render.yml", "docker-compose.yaml", "docker-compose.yml")]
 
-        agent_name = rp.name
-        endpoint = "http://127.0.0.1:8000/api/chat"
-        discovered_tools = []
+            agent_name = rp.name
+            endpoint = "http://127.0.0.1:8000/api/chat"
+            discovered_tools = []
 
-        if manifest_files:
-            import yaml
-            try:
-                with open(manifest_files[0], "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
-                if isinstance(data, dict):
-                    agent_name = data.get("agent_name") or data.get("name") or agent_name
-                    rt = data.get("runtime", {})
-                    if rt and isinstance(rt, dict) and rt.get("endpoint"):
-                        endpoint = rt.get("endpoint")
-                    caps = data.get("capabilities", {})
-                    if caps and isinstance(caps, dict) and caps.get("tools"):
-                        discovered_tools = caps.get("tools")
-            except Exception:
-                pass
+            if manifest_files:
+                import yaml
+                try:
+                    with open(manifest_files[0], "r", encoding="utf-8") as f:
+                        data = yaml.safe_load(f)
+                    if isinstance(data, dict):
+                        agent_name = data.get("agent_name") or data.get("name") or agent_name
+                        rt = data.get("runtime", {})
+                        if rt and isinstance(rt, dict) and rt.get("endpoint"):
+                            endpoint = rt.get("endpoint")
+                        caps = data.get("capabilities", {})
+                        if caps and isinstance(caps, dict) and caps.get("tools"):
+                            discovered_tools = caps.get("tools")
+                except Exception:
+                    pass
 
-        return {
-            "success": True,
-            "source_type": "repo",
-            "agent_name": agent_name,
-            "endpoint_url": endpoint,
-            "http_method": "POST",
-            "discovered_tools": discovered_tools,
-            "tools_count": len(discovered_tools),
-            "payload_template": "{\n  \"message\": \"{PROMPT}\"\n}"
-        }
+            return {
+                "success": True,
+                "source_type": "repo",
+                "agent_name": agent_name,
+                "endpoint_url": endpoint,
+                "http_method": "POST",
+                "discovered_tools": discovered_tools,
+                "tools_count": len(discovered_tools),
+                "payload_template": "{\n  \"message\": \"{PROMPT}\"\n}"
+            }
+        finally:
+            if is_temp and rp:
+                import shutil
+                shutil.rmtree(rp, ignore_errors=True)
     else:
         raise HTTPException(status_code=400, detail="Invalid source_type. Must be 'openapi' or 'repo'.")
 
@@ -1224,14 +1230,35 @@ async def execute_live_agent_test(
     from live_testing import scans as lt_scans
 
     _repo_dir = None
-    if req.repo_path and req.repo_path.strip():
-        _repo_dir, _repo_err = lt_scans.resolve_repo(req.repo_path)
-        if _repo_err:
-            if req.openapi_url or req.endpoint_url:
-                logging.warning("Live agent repo path not accessible in this environment (%s). Proceeding with live endpoint tests.", _repo_err)
-                _repo_dir = None
-            else:
-                raise HTTPException(status_code=400, detail=_repo_err)
+    _temp_repo = False
+    _repo_dir, _repo_err = lt_scans.resolve_repo(req.repo_path or "")
+    if _repo_err:
+        if os.environ.get("VERCEL") and (req.openapi_url or req.endpoint_url) and not (req.repo_path or "").strip().lower().startswith(("http://", "https://", "git@")):
+            logging.warning("Local repo path %s not found on Vercel. Proceeding with live endpoint tests.", req.repo_path)
+            _repo_dir = None
+        else:
+            raise HTTPException(status_code=400, detail=_repo_err)
+    elif _repo_dir and "agent_audit_git_" in str(_repo_dir):
+        _temp_repo = True
+
+    try:
+        return await _execute_live_agent_test_inner(req, auth_user, user_id, _repo_dir, _temp_repo, started_at)
+    finally:
+        if _temp_repo and _repo_dir:
+            import shutil
+            shutil.rmtree(_repo_dir, ignore_errors=True)
+
+
+async def _execute_live_agent_test_inner(
+    req: LiveAgentTestRequest,
+    auth_user: dict,
+    user_id: Any,
+    _repo_dir: Optional[Path],
+    _temp_repo: bool = False,
+    started_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    started_at = started_at or datetime.now(timezone.utc).isoformat()
+    from live_testing import scans as lt_scans
 
     agent_name = req.agent_name or "Live Monitored Agent"
     repo_summary = None
@@ -1240,53 +1267,51 @@ async def execute_live_agent_test(
     discovered_route = None
 
     # 1. Process Repository (Codebase Path / Git URL)
-    if req.repo_path and req.repo_path.strip():
-        clean_path = req.repo_path.strip().strip('"').strip("'")
-        rp = Path(clean_path).expanduser().resolve()
-        if rp.exists():
-            manifest_files = list(rp.glob("*.yaml")) + list(rp.glob("*.yml"))
-            manifest_files = [f for f in manifest_files if f.name.lower() not in ("render.yaml", "render.yml", "docker-compose.yaml", "docker-compose.yml")]
-            repo_tools = []
-            manifest_found = False
-            manifest_name = None
-            if manifest_files:
-                import yaml
-                try:
-                    with open(manifest_files[0], "r", encoding="utf-8") as f:
-                        data = yaml.safe_load(f)
-                    if isinstance(data, dict):
-                        manifest_found = True
-                        manifest_name = manifest_files[0].name
-                        if not req.agent_name or req.agent_name in ("Live Agent", "Live Monitored Agent"):
-                            agent_name = data.get("agent_name") or data.get("name") or agent_name
-                        rt = data.get("runtime", {})
-                        if rt and isinstance(rt, dict) and rt.get("endpoint") and not req.endpoint_url:
-                            req.endpoint_url = rt.get("endpoint")
-                        caps = data.get("capabilities", {})
-                        if caps and isinstance(caps, dict) and caps.get("tools"):
-                            repo_tools = caps.get("tools")
-                except Exception:
-                    pass
+    if _repo_dir and _repo_dir.is_dir():
+        rp = _repo_dir
+        manifest_files = list(rp.glob("*.yaml")) + list(rp.glob("*.yml"))
+        manifest_files = [f for f in manifest_files if f.name.lower() not in ("render.yaml", "render.yml", "docker-compose.yaml", "docker-compose.yml")]
+        repo_tools = []
+        manifest_found = False
+        manifest_name = None
+        if manifest_files:
+            import yaml
+            try:
+                with open(manifest_files[0], "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f)
+                if isinstance(data, dict):
+                    manifest_found = True
+                    manifest_name = manifest_files[0].name
+                    if not req.agent_name or req.agent_name in ("Live Agent", "Live Monitored Agent"):
+                        agent_name = data.get("agent_name") or data.get("name") or agent_name
+                    rt = data.get("runtime", {})
+                    if rt and isinstance(rt, dict) and rt.get("endpoint") and not req.endpoint_url:
+                        req.endpoint_url = rt.get("endpoint")
+                    caps = data.get("capabilities", {})
+                    if caps and isinstance(caps, dict) and caps.get("tools"):
+                        repo_tools = caps.get("tools")
+            except Exception:
+                pass
 
-            code_files_count = len(list(rp.glob("**/*.py"))) + len(list(rp.glob("**/*.ts"))) + len(list(rp.glob("**/*.js")))
-            repo_summary = {
-                "status": "VERIFIED",
-                "repo_path": str(rp),
-                "manifest_found": manifest_found,
-                "manifest_name": manifest_name,
-                "tools_detected": repo_tools,
-                "tools_count": len(repo_tools),
-                "source_files_count": code_files_count
-            }
-        else:
-            repo_summary = {
-                "status": "ACCESSED",
-                "repo_path": clean_path,
-                "manifest_found": False,
-                "tools_detected": [],
-                "tools_count": 0,
-                "source_files_count": 0
-            }
+        code_files_count = len(list(rp.glob("**/*.py"))) + len(list(rp.glob("**/*.ts"))) + len(list(rp.glob("**/*.js")))
+        repo_summary = {
+            "status": "VERIFIED",
+            "repo_path": req.repo_path.strip(),
+            "manifest_found": manifest_found,
+            "manifest_name": manifest_name,
+            "tools_detected": repo_tools,
+            "tools_count": len(repo_tools),
+            "source_files_count": code_files_count
+        }
+    elif req.repo_path and req.repo_path.strip():
+        repo_summary = {
+            "status": "ACCESSED",
+            "repo_path": req.repo_path.strip(),
+            "manifest_found": False,
+            "tools_detected": [],
+            "tools_count": 0,
+            "source_files_count": 0
+        }
 
     # 2. Process OpenAPI Specification
     if req.openapi_url and req.openapi_url.strip():
@@ -1451,7 +1476,9 @@ async def execute_live_agent_test(
     # Static scans: risky routes and missing login from the API description, database access, deletes, tools
     # and hardcoded secrets from the code. A confirmed secret or an open destructive route blocks certification.
     openapi_scan = lt_scans.scan_openapi(discovered_spec)
-    repo_scan = lt_scans.scan_repo(req.repo_path or "")
+    repo_scan = lt_scans.scan_repo(str(_repo_dir)) if _repo_dir else {"available": False, "error": "No repository path provided", "findings": [], "summary": {}}
+    if _temp_repo and req.repo_path:
+        repo_scan["path"] = req.repo_path.strip()
     combined_findings = lt_scans.combine(openapi_scan, repo_scan)
     static_findings = [f for f in (openapi_scan["findings"] + repo_scan["findings"] + combined_findings) if f.get("severity") != "INFO"]
     all_findings = all_findings + static_findings

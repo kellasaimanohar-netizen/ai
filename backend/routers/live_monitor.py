@@ -142,7 +142,7 @@ def schedule_create(body: ScheduleIn, current_user: dict = Depends(get_current_u
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"The test settings are not valid: {e}")
     repo_arg = (body.request.get("repo_path") or "").strip()
-    if repo_arg:
+    if repo_arg and not repo_arg.lower().startswith(("http://", "https://", "git@")):
         _dir, repo_err = scans.resolve_repo(repo_arg)
         if repo_err and not (body.request.get("endpoint_url") or body.request.get("openapi_url")):
             raise HTTPException(status_code=400, detail=repo_err)
