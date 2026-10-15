@@ -120,12 +120,13 @@ def _resolve_audit_user(authorization: str | None) -> dict[str, Any]:
 
 # Clean up any leftover temporary files from previous runs
 def cleanup_temp_files():
-    temp_files = glob.glob(str(root_dir / "targets" / f"{_TEMP_PREFIX}*.yaml"))
-    for f in temp_files:
-        try:
-            os.remove(f)
-        except Exception:
-            pass
+    search_dirs = [root_dir / "targets", Path(tempfile.gettempdir())]
+    for d in search_dirs:
+        for f in glob.glob(str(d / f"{_TEMP_PREFIX}*.yaml")):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
 
 # Step 1: Dynamic History Database
 _AUDIT_HISTORY = {}
@@ -748,8 +749,13 @@ async def run_ui_audit(req: AuditRequest, authorization: str | None = Header(def
             
             temp_path = None
             try:
-                targets_dir = root_dir / "targets"
-                targets_dir.mkdir(parents=True, exist_ok=True)
+                # Use writable /tmp directory on serverless (e.g. Vercel/Lambda) where code tree is read-only
+                targets_dir = Path(tempfile.gettempdir()) if os.environ.get("VERCEL") else (root_dir / "targets")
+                try:
+                    targets_dir.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    targets_dir = Path(tempfile.gettempdir())
+
                 fd, temp_name = tempfile.mkstemp(
                     prefix=_TEMP_PREFIX, suffix=".yaml", dir=str(targets_dir)
                 )
