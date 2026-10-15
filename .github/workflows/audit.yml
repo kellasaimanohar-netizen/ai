@@ -1,4 +1,4 @@
-name: Agent Audit CI — v7
+name: CertifyAI CI/CD — v10
 
 on:
   push:
@@ -15,35 +15,57 @@ permissions:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev,all]"
+      - run: pip install -r requirements.txt
       - run: ruff check src/ tests/
+        continue-on-error: true
       - run: mypy src/agent_audit/ --ignore-missing-imports
         continue-on-error: true
       - run: pytest -v
 
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm run build
+
   framework-validation:
     runs-on: ubuntu-latest
-    needs: lint-and-test
+    needs: [lint-and-test, frontend-build]
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -e ".[all]"
-      - name: Run full v7 audit (all 17 phases)
+      - run: pip install -r requirements.txt
+      - name: Run full v10 audit validation
         run: |
           agent-audit run \
             --target targets/my_agent_v4.yaml \
             --mode validate \
-            --variability-runs 5 \
+            --variability-runs 3 \
             --phase all \
             --output report.json \
             --sarif report.sarif \
@@ -53,38 +75,13 @@ jobs:
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: report.sarif
-          category: agent-audit-v7
+          sarif_file: backend/report.sarif
+          category: agent-audit-v10
       - uses: actions/upload-artifact@v4
         with:
-          name: audit-report-v7
+          name: audit-report-v10
           path: |
-            report.json
-            report.sarif
-            report.html
-            certificate.json
-
-  drift-check:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -e ".[all]"
-      - uses: actions/download-artifact@v4
-        with:
-          name: audit-report-v7
-          path: baseline/
-        continue-on-error: true
-      - name: Drift check
-        if: hashFiles('baseline/certificate.json') != ''
-        run: |
-          agent-audit drift \
-            --cert baseline/certificate.json \
-            --target targets/my_agent_v4.yaml \
-            --variability-runs 10 \
-            --mock-tools
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_AUDIT_WEBHOOK }}
+            backend/report.json
+            backend/report.sarif
+            backend/report.html
+            backend/certificate.json

@@ -64,13 +64,19 @@ def _arg_values(call: ProposedCall) -> list[str]:
     def walk(v):
         if isinstance(v, dict):
             for k, x in v.items():
-                out.append(str(k))     # keys are attacker-influenced too
+                s_k = str(k)
+                if len(s_k) > 10000:
+                    s_k = s_k[:5000] + s_k[-5000:]
+                out.append(s_k)
                 walk(x)
         elif isinstance(v, (list, tuple)):
             for x in v:
                 walk(x)
         else:
-            out.append(str(v))
+            s_v = str(v)
+            if len(s_v) > 10000:
+                s_v = s_v[:5000] + s_v[-5000:]
+            out.append(s_v)
     walk(call.args)
     return out
 

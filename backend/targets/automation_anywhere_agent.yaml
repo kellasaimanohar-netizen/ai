@@ -20,4 +20,8 @@ sources:
       requires_hitl: true
     security:
       pii_fields: ["email", "ssn", "policy_number"]
+    capability_profile:
+      archetypes: ["workflow_automation", "financial_decision", "customer_service"]
+      data_mode: "dynamic"     # Lookup_Policy/Assess_Claim read live claims data
+      risk_level: "critical"   # Approve_Payout moves money, HITL-gated
 compliance_frameworks: ["owasp_agentic_2025", "india_dpdp_2023", "eu_ai_act"]

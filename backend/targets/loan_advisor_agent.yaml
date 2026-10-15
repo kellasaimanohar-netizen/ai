@@ -1,0 +1,32 @@
+agent_name: "Loan_Advisor_Agent"
+
+sources:
+  - type: yaml_inline
+    runtime:
+      protocol: http
+      endpoint: "https://loan-agent-2ud4.onrender.com/api/chat"
+      target_env: "production"
+
+    capabilities:
+      max_steps: 15
+      context_budget_tokens: 12000
+      tools:
+        - "calculate_loan"
+        - "compare_loans"
+
+    security:
+      pii_fields: ["email", "phone", "income", "government_id", "address"]
+      data_classification: ["DPDP_PERSONAL"]
+      allowed_data_regions: ["us-east-1"]
+
+    capability_profile:
+      archetypes: ["financial_decision", "tool_calling"]
+      data_mode: "dynamic"
+      decision_making: true
+      sensitive_data_handling: true
+      risk_level: "critical"
+
+    runbooks_dir: "c:/Personal/V10/backend/runbooks"
+
+  - type: repo
+    path: "https://github.com/saimanoharkella4-svg/loan-agent"

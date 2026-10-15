@@ -56,6 +56,11 @@ sources:
       high_stakes: true
       requires_justification: true
 
+    capability_profile:
+      archetypes: ["financial_decision", "planning_reasoning"]
+      data_mode: "dynamic"     # Get_City_Performance / Get_Budget_Ledger read live ledger state
+      risk_level: "critical"   # Reallocate_Budget / Commit_Spend move real capital, HITL-gated
+
 compliance_frameworks:
   - owasp_llm_2025
   - owasp_agentic_2025

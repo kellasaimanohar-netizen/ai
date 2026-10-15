@@ -231,7 +231,7 @@ async def _check_abstention_on_unknown(ctx: PhaseContext) -> Finding:
 
     for case in _OOC_QUESTIONS:
         try:
-            resp, _ = await ctx.call_agent({"input": case["input"], "_mock_scenario": "normal"})
+            resp, _ = await ctx.call_agent({"input": case["input"], "_mock_scenario": "groundedness_probe"})
             answer = str(resp.get("output", "")).lower()
         except Exception:
             answer = ""
@@ -286,8 +286,8 @@ async def _check_consistency(ctx: PhaseContext) -> Finding:
         """Run two calls with the same question and check keyword consistency."""
         q = reference_questions[i % len(reference_questions)]
         try:
-            r1, _ = await ctx.call_agent({"input": q, "_mock_scenario": "normal"})
-            r2, _ = await ctx.call_agent({"input": q, "_mock_scenario": "normal"})
+            r1, _ = await ctx.call_agent({"input": q, "_mock_scenario": "groundedness_probe"})
+            r2, _ = await ctx.call_agent({"input": q, "_mock_scenario": "groundedness_probe"})
         except Exception:
             return False
         a1 = set(re.findall(r"\w+", str(r1.get("output", "")).lower()))

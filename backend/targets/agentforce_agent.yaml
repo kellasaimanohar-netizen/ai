@@ -61,10 +61,21 @@ sources:
     security:
       pii_fields: ["email", "phone", "case_number", "order_id"]
 
-    # Optional — used by the groundedness phase if present.
-    # golden_dataset:
-    #   path: "./fixtures/golden_dataset/agentforce_cases.jsonl"
-    #   format: jsonl
+    # Declared capability profile — overrides the framework's heuristic
+    # tool-name-based derivation (agent_audit.capability_profile). Used by
+    # `run_audit(..., phases="auto")` to select which of the 17 phases apply.
+    capability_profile:
+      archetypes: ["customer_service", "tool_calling"]
+      data_mode: "dynamic"     # Get_Order_Status is a live lookup, not static
+      risk_level: "high"       # Issue_Refund is destructive + HITL-gated
+
+    # Committed, CI-reachable sample dataset (schema documented in
+    # agent_audit/golden_schema.py) — gives GND-GOLDEN-001 and
+    # FAIR-EQUITY-001 a real dataset to score instead of only their
+    # skip-path branches. Swap for a real Agentforce eval set in production.
+    golden_dataset:
+      path: "golden/sample_dataset.jsonl"
+      format: jsonl
 
 compliance_frameworks:
   - owasp_llm_2025

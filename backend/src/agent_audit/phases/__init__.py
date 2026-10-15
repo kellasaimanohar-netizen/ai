@@ -24,6 +24,7 @@ All v6 phases (1–11, 14) are preserved unchanged.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import time
 from dataclasses import dataclass, field
@@ -35,6 +36,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# The phase a live call belongs to, set by the runner for each phase (concurrent phases each get their own value)
+current_phase: contextvars.ContextVar[str | None] = contextvars.ContextVar("current_phase", default=None)
+
 
 @dataclass(slots=True)
 class PhaseContext:
@@ -42,6 +46,7 @@ class PhaseContext:
 
     manifest: TargetManifest
     mock_tools: bool = False
+    mock_posture: str = "secure"   # "secure" | "vulnerable" — see mock_client.py
     inject_latency_ms: int = 0
     concurrency: int = 4
     variability_runs: int = 5
@@ -50,6 +55,17 @@ class PhaseContext:
     budget: Any = None
     _mock_client: "MockAgentClient | None" = field(default=None, init=False, repr=False)
     _live_client: Any = field(default=None, init=False, repr=False)
+    # Live runs: per phase, how many requests the agent answered ("ok") and how many it did not ("unanswered":
+    # unreachable, or refused with 403 before the agent saw them). The runner reports a phase whose requests were
+    # never answered as not tested, because its checks would only be grading empty answers.
+    phase_calls: dict[str, dict[str, int]] = field(default_factory=dict, init=False, repr=False)
+
+    def _count_call(self, answered: bool) -> None:
+        phase = current_phase.get()
+        if phase is None:
+            return
+        counts = self.phase_calls.setdefault(phase, {"ok": 0, "unanswered": 0})
+        counts["ok" if answered else "unanswered"] += 1
 
     async def call_agent(
         self, payload: dict[str, Any], timeout_s: float | None = None,
@@ -66,9 +82,22 @@ class PhaseContext:
         if self.mock_tools:
             from agent_audit.mock_client import MockAgentClient
             if self._mock_client is None:
-                self._mock_client = MockAgentClient(self.manifest, self.inject_latency_ms)
+                self._mock_client = MockAgentClient(
+                    self.manifest, self.inject_latency_ms, posture=self.mock_posture,
+                )
             return await self._mock_client.invoke(payload, timeout_s)
 
+        try:
+            resp, latency = await self._call_live(payload, timeout_s)
+        except Exception as exc:
+            from agent_audit.findings import is_unreachable
+            if is_unreachable(exc):
+                self._count_call(False)
+            raise
+        self._count_call(not (isinstance(resp, dict) and resp.get("_blocked_403")))
+        return resp, latency
+
+    async def _call_live(self, payload: dict[str, Any], timeout_s: float) -> tuple[dict[str, Any], float]:
         if self._live_client is None:
             from agent_audit.live import CallBudget
             provider = getattr(self.manifest.runtime, "provider", None)
@@ -124,6 +153,10 @@ PHASE_MAP: dict[str, str] = {
     "decision":        "agent_audit.phases.phase17_decision",
     "security_agent":  "agent_audit.phases.phase18_security_agent",
     "browser":         "agent_audit.phases.phase19_browser",
+    # ── v10.4 new phases ────────────────────────────────────────────────────
+    "freshness":       "agent_audit.phases.phase20_freshness",
+    "tool_use":        "agent_audit.phases.phase21_tool_use",
+    "multi_agent":     "agent_audit.phases.phase22_multi_agent",
 }
 
 PHASE_LABELS: dict[str, str] = {
@@ -145,21 +178,15 @@ PHASE_LABELS: dict[str, str] = {
     "decision":        "Phase 17 · Decision Agent Safety  [v7]",
     "security_agent":  "Phase 18 · Security Agent Safety  [v7]",
     "browser":         "Phase 19 · Browser Agent Safety  [v7]",
+    "freshness":       "Phase 20 · Real-Time Data & Freshness  [v10.4]",
+    "tool_use":        "Phase 21 · Tool-Use Safety  [v10.4]",
+    "multi_agent":     "Phase 22 · Multi-Agent System Safety  [v10.4]",
 }
 
-# Phases with no inter-phase dependencies — safe to run concurrently
-_PARALLEL_PHASES = frozenset({
-    "architecture", "observability", "ops", "supply_chain",
-    "data_governance", "fairness", "mcp",
-    # v7 — all new phases are independent
-    "voice", "data_analysis", "decision", "security_agent", "browser",
-})
+# NOTE: the parallel/sequential execution-order lists live in runner.py
+# (the only place that actually reads them) — they used to be duplicated
+# here too, but nothing imported this copy, and a divergence between the
+# two would have been silent. Don't re-add them here; edit runner.py's
+# _PARALLEL_PHASES / _SEQUENTIAL_PHASES instead.
 
-# Phases that must run in order
-_SEQUENTIAL_PHASES = [
-    "reliability", "security", "adversarial",
-    "groundedness",
-    "multi_turn",
-]
-
-__all__ = ["PHASE_LABELS", "PHASE_MAP", "_PARALLEL_PHASES", "_SEQUENTIAL_PHASES", "PhaseContext"]
+__all__ = ["PHASE_LABELS", "PHASE_MAP", "PhaseContext"]

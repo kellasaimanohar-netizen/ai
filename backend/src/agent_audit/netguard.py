@@ -21,6 +21,31 @@ class BlockedURLError(ValueError):
     """Raised when a URL resolves to a non-public / unsafe address."""
 
 
+# RFC 6052 well-known NAT64 prefix. On IPv6-only networks with DNS64, a public IPv4 host resolves to
+# 64:ff9b::<ipv4>. Python reports the whole prefix as "reserved", which would block every public site
+# on such networks, so the embedded IPv4 address is what gets checked.
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+
+
+def effective_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """The address a connection really reaches: unwraps IPv4-mapped (::ffff:a.b.c.d) and NAT64
+    (64:ff9b::a.b.c.d) IPv6 addresses to the IPv4 address inside them."""
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return addr.ipv4_mapped
+        if addr in _NAT64_PREFIX:
+            return ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    return addr
+
+
+def is_non_public(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True for loopback, private, link-local, reserved, multicast and unspecified addresses,
+    judged on the unwrapped address."""
+    a = effective_address(addr)
+    return (a.is_private or a.is_loopback or a.is_link_local
+            or a.is_reserved or a.is_multicast or a.is_unspecified)
+
+
 def assert_public_url(url: str, *, allow_insecure_http: bool = False) -> None:
     """Refuse URLs that resolve to loopback / private / link-local / reserved /
     multicast / unspecified addresses, or (by default) plain http.
@@ -52,8 +77,7 @@ def assert_public_url(url: str, *, allow_insecure_http: bool = False) -> None:
 
     for info in infos:
         addr = ipaddress.ip_address(info[4][0])
-        if (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+        if is_non_public(addr):
             raise BlockedURLError(
                 f"refusing non-public address {addr} (host {host!r}) — "
                 "blocked to prevent SSRF. Set AGENT_AUDIT_ALLOW_PRIVATE_FETCH=1 "

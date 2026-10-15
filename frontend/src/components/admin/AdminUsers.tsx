@@ -1,62 +1,60 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, Bot, ChevronRight, RefreshCw, UserPlus, Users } from 'lucide-react';
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from 'recharts';
+import { apiFetch } from '../../utils/apiClient';
 import {
-  Users,
-  UserPlus,
-  TrendingUp,
-  Clock,
-  Shield,
-  Activity,
-  CheckCircle2,
-  ChevronRight,
-  ArrowLeft,
-  Search,
-  RefreshCw,
-  X,
-  Edit2
-} from 'lucide-react';
-import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid
-} from 'recharts';
+  Alert, Avatar, Badge, Button, EmptyState, Field, Modal, PageHeader, Panel, SearchInput, SortHeader, Stat, TableSkeleton, TierBadge,
+  modeLabel, scoreColor, scoreTone, useSort, fmtScore,
+} from '../ui';
+import { ChartTooltip, axisProps, lineProps } from '../charts';
+
+type SortKey = 'name' | 'tests' | 'score';
+
+const RoleBadge: React.FC<{ role?: string }> = ({ role }) => (
+  <Badge tone={role === 'ADMIN' ? 'info' : 'neutral'}>{role === 'ADMIN' ? 'Admin' : 'User'}</Badge>
+);
+const StatusBadge: React.FC<{ status?: string }> = ({ status }) => (
+  <Badge tone={status === 'Active' ? 'pass' : 'neutral'} dot>{status || 'Unknown'}</Badge>
+);
 
 export const AdminUsers: React.FC = () => {
   const [users, setUsers] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
 
   // Selected user detail state
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [userDetail, setUserDetail] = useState<any | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [confirmToggle, setConfirmToggle] = useState<any | null>(null);
+  const [toggling, setToggling] = useState(false);
 
   // Add user modal state
   const [isAddUserOpen, setIsAddUserOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
-  const [newPassword, setNewPassword] = useState('user123');
+  const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState<'USER' | 'ADMIN'>('USER');
-  const [newDept, setNewDept] = useState('AI Quality Assurance & Testing');
+  const [newDept, setNewDept] = useState('');
   const [addError, setAddError] = useState('');
-
-  const BACKEND_URL = import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== '' ? import.meta.env.VITE_API_URL : (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '');
+  const [creating, setCreating] = useState(false);
 
   const fetchUsers = async () => {
     setIsLoading(true);
+    setError(null);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/admin/users`);
-      if (res.ok) {
-        const data = await res.json();
-        setUsers(data.users || []);
-      }
+      const res = await apiFetch('/api/admin/users');
+      if (!res.ok) throw new Error('The users could not be loaded.');
+      const data = await res.json();
+      setUsers(data.users || []);
     } catch (err) {
-      console.error('Failed to load users:', err);
+      setError(err instanceof Error ? err.message : 'The users could not be loaded.');
     } finally {
       setIsLoading(false);
+      setLoaded(true);
     }
   };
 
@@ -67,243 +65,208 @@ export const AdminUsers: React.FC = () => {
   const handleSelectUser = async (userId: number) => {
     setSelectedUserId(userId);
     setIsDetailLoading(true);
+    setDetailError(null);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/admin/users/${userId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setUserDetail(data);
-      }
-    } catch (err) {
-      console.error('Failed to load user details:', err);
+      const res = await apiFetch(`/api/admin/users/${userId}`);
+      if (!res.ok) throw new Error();
+      setUserDetail(await res.json());
+    } catch {
+      setDetailError('This user could not be loaded.');
     } finally {
       setIsDetailLoading(false);
     }
   };
 
+  const resetAddForm = () => {
+    setNewName(''); setNewEmail(''); setNewPassword(''); setNewRole('USER'); setNewDept(''); setAddError('');
+  };
+
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddError('');
+    setCreating(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/admin/users`, {
+      const res = await apiFetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: newName,
-          email: newEmail,
-          password: newPassword,
-          role: newRole,
-          department: newDept
-        })
+        body: JSON.stringify({ name: newName, email: newEmail, password: newPassword, role: newRole, department: newDept }),
       });
       if (res.ok) {
         setIsAddUserOpen(false);
-        setNewName('');
-        setNewEmail('');
+        resetAddForm();
         fetchUsers();
       } else {
-        const err = await res.json();
-        setAddError(err.detail || 'Failed to create user');
+        const err = await res.json().catch(() => ({}));
+        setAddError(typeof err.detail === 'string' ? err.detail : 'The account could not be created.');
       }
     } catch (err: any) {
-      setAddError(err.message || 'Network error');
+      setAddError(err?.message || 'Network error. Check your connection and try again.');
+    } finally {
+      setCreating(false);
     }
   };
 
   const handleToggleStatus = async (userObj: any) => {
     const newStatus = userObj.status === 'Active' ? 'Inactive' : 'Active';
+    setToggling(true);
     try {
-      await fetch(`${BACKEND_URL}/api/admin/users/${userObj.id}`, {
+      const res = await apiFetch(`/api/admin/users/${userObj.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus })
+        body: JSON.stringify({ status: newStatus }),
       });
+      if (!res.ok) throw new Error();
       fetchUsers();
-      if (selectedUserId === userObj.id) {
-        handleSelectUser(userObj.id);
-      }
-    } catch (err) {
-      console.error('Failed to update user status:', err);
+      if (selectedUserId === userObj.id) handleSelectUser(userObj.id);
+    } catch {
+      setDetailError('The account status could not be changed.');
+    } finally {
+      setToggling(false);
+      setConfirmToggle(null);
     }
   };
 
-  const filteredUsers = users.filter(u =>
-    u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    u.email.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredUsers = useMemo(() => users.filter(u =>
+    (u.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (u.email || '').toLowerCase().includes(searchTerm.toLowerCase())
+  ), [users, searchTerm]);
+
+  const { sorted, sort, toggle } = useSort<any, SortKey>(filteredUsers, {
+    name: u => u.name,
+    tests: u => u.total_tests || 0,
+    score: u => u.avg_score || null,
+  }, { key: 'name', dir: 'asc' });
+
+  const confirmModal = (
+    <Modal
+      open={!!confirmToggle}
+      onClose={() => setConfirmToggle(null)}
+      title={confirmToggle?.status === 'Active' ? `Deactivate ${confirmToggle?.name}?` : `Activate ${confirmToggle?.name}?`}
+      description={confirmToggle?.status === 'Active'
+        ? 'They will not be able to sign in until the account is activated again. Their tests and reports are kept.'
+        : 'They will be able to sign in again with their existing password.'}
+      footer={
+        <>
+          <Button onClick={() => setConfirmToggle(null)}>Cancel</Button>
+          <Button variant={confirmToggle?.status === 'Active' ? 'danger' : 'primary'} loading={toggling} onClick={() => handleToggleStatus(confirmToggle)}>
+            {confirmToggle?.status === 'Active' ? 'Deactivate account' : 'Activate account'}
+          </Button>
+        </>
+      }
+    />
   );
 
   // ==========================================
-  // VIEW: USER DETAILS (Ismeet drilldown)
+  // VIEW: USER DETAILS
   // ==========================================
-  if (selectedUserId && userDetail) {
+  if (selectedUserId) {
+    const back = () => { setSelectedUserId(null); setUserDetail(null); setDetailError(null); };
+    if (!userDetail) {
+      return (
+        <div className="page-stack animate-slideup">
+          <div><Button variant="ghost" icon={ArrowLeft} onClick={back}>All users</Button></div>
+          {detailError ? (
+            <Alert tone="critical" title={detailError} action={<Button size="sm" onClick={() => handleSelectUser(selectedUserId)}>Try again</Button>} />
+          ) : (
+            <div className="page-loading" role="status" aria-label="Loading user">
+              <span className="skeleton" style={{ height: 96 }} />
+              <div className="stat-grid kpi-6">{[0, 1, 2, 3, 4, 5].map(i => <span key={i} className="skeleton" style={{ height: 104 }} />)}</div>
+              <span className="skeleton" style={{ height: 240 }} />
+            </div>
+          )}
+        </div>
+      );
+    }
     const u = userDetail.user;
     const stats = userDetail.stats;
     const history = userDetail.test_history || [];
     const trend = userDetail.score_trend || [];
+    const hasTrend = trend.some((d: any) => d.score != null);
 
     return (
-      <div className="animate-slideup" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        
-        {/* Top Navigation Row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <button
-            className="btn btn-secondary"
-            onClick={() => {
-              setSelectedUserId(null);
-              setUserDetail(null);
-            }}
-            style={{ padding: '6px 12px', fontSize: '12.5px', gap: '6px' }}
-          >
-            <ArrowLeft size={14} />
-            <span>Back to Users</span>
-          </button>
-          <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>/ User Governance & Performance</span>
-        </div>
+      <div className="page-stack animate-slideup">
+        <div><Button variant="ghost" icon={ArrowLeft} onClick={back}>All users</Button></div>
 
-        {/* User Profile Header Card */}
-        <div className="glass-card" style={{ padding: '24px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div style={{
-              width: '56px',
-              height: '56px',
-              borderRadius: '50%',
-              background: u.role === 'ADMIN' ? 'linear-gradient(135deg, #00f0ff, #7000ff)' : 'linear-gradient(135deg, #2ecc71, #00b4d8)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '22px',
-              fontWeight: '800',
-              color: '#fff'
-            }}>
-              {u.name ? u.name[0].toUpperCase() : 'U'}
-            </div>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <h1 style={{ fontSize: '22px', fontWeight: '800', color: 'var(--text-primary)', margin: 0 }}>
-                  {u.name}
-                </h1>
-                <span className={`role-tag-badge ${u.role?.toLowerCase()}`} style={{
-                  padding: '2px 8px',
-                  borderRadius: '12px',
-                  fontSize: '11px',
-                  fontWeight: '700',
-                  background: u.role === 'ADMIN' ? 'rgba(0, 240, 255, 0.15)' : 'rgba(46, 204, 113, 0.15)',
-                  color: u.role === 'ADMIN' ? 'var(--accent-cyan)' : '#2ecc71',
-                  border: `1px solid ${u.role === 'ADMIN' ? 'rgba(0, 240, 255, 0.3)' : 'rgba(46, 204, 113, 0.3)'}`
-                }}>
-                  {u.role}
-                </span>
-                <span className={`status-pill ${u.status === 'Active' ? 'certified' : 'not_certified'}`} style={{ fontSize: '10px' }}>
-                  {u.status}
-                </span>
+        {detailError && <Alert tone="critical" title={detailError} />}
+
+        <div className="page-head" style={{ alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 0 }}>
+            <Avatar name={u.name} size="lg" />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <h1>{u.name}</h1>
+                <RoleBadge role={u.role} />
+                <StatusBadge status={u.status} />
               </div>
-              <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
-                {u.email} • {u.department}
-              </span>
+              <p>{[u.email, u.department].filter(Boolean).join(' · ')}</p>
             </div>
           </div>
-
-          <button
-            className="btn btn-secondary"
-            onClick={() => handleToggleStatus(u)}
-            style={{ fontSize: '12px', padding: '6px 12px' }}
-          >
-            {u.status === 'Active' ? 'Deactivate Account' : 'Activate Account'}
-          </button>
-        </div>
-
-        {/* User Stats Grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
-          <div className="glass-card stat-card" style={{ padding: '16px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700' }}>Total Tests</span>
-            <div style={{ fontSize: '24px', fontWeight: '800', color: 'var(--text-primary)', marginTop: '4px' }}>{stats.total_tests}</div>
-          </div>
-          <div className="glass-card stat-card" style={{ padding: '16px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700' }}>Agents Tested</span>
-            <div style={{ fontSize: '24px', fontWeight: '800', color: '#a855f7', marginTop: '4px' }}>{stats.agents_tested}</div>
-          </div>
-          <div className="glass-card stat-card" style={{ padding: '16px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700' }}>Average Score</span>
-            <div style={{ fontSize: '24px', fontWeight: '800', color: '#f1c40f', marginTop: '4px' }}>{stats.average_score}%</div>
-          </div>
-          <div className="glass-card stat-card" style={{ padding: '16px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700' }}>Certified</span>
-            <div style={{ fontSize: '24px', fontWeight: '800', color: '#2ecc71', marginTop: '4px' }}>{stats.certified_count}</div>
-          </div>
-          <div className="glass-card stat-card" style={{ padding: '16px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700' }}>Conditional</span>
-            <div style={{ fontSize: '24px', fontWeight: '800', color: '#f1c40f', marginTop: '4px' }}>{stats.conditional_count}</div>
-          </div>
-          <div className="glass-card stat-card" style={{ padding: '16px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700' }}>Not Certified</span>
-            <div style={{ fontSize: '24px', fontWeight: '800', color: '#e74c3c', marginTop: '4px' }}>{stats.not_certified_count}</div>
+          <div className="page-head-actions">
+            <Button icon={RefreshCw} variant="ghost" loading={isDetailLoading} onClick={() => handleSelectUser(u.id)}>Refresh</Button>
+            <Button variant={u.status === 'Active' ? 'secondary' : 'primary'} onClick={() => setConfirmToggle(u)}>
+              {u.status === 'Active' ? 'Deactivate account' : 'Activate account'}
+            </Button>
           </div>
         </div>
 
-        {/* Score Trend Chart */}
-        <div className="glass-card" style={{ padding: '22px' }}>
-          <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <TrendingUp size={16} style={{ color: '#2ecc71' }} />
-            {u.name}&apos;s Score Trend (Last 14 Days)
-          </h3>
-          <div style={{ width: '100%', height: '180px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="adminUserGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#2ecc71" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="#2ecc71" stopOpacity={0.0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                <XAxis dataKey="date" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
-                <YAxis domain={[0, 100]} stroke="var(--text-muted)" fontSize={11} tickLine={false} tickFormatter={v => `${v}%`} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '12px' }}
-                  formatter={(v: any) => [`${v}%`, 'Average Score']}
-                />
-                <Area type="monotone" dataKey="score" stroke="#2ecc71" strokeWidth={2} fill="url(#adminUserGrad)" connectNulls={true} dot={{ r: 3, fill: '#2ecc71' }} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+        <div className="stat-grid kpi-6">
+          <Stat label="Total tests" value={stats.total_tests} />
+          <Stat label="Agents tested" value={stats.agents_tested} />
+          <Stat label="Average score" value={stats.total_tests ? `${fmtScore(stats.average_score)}%` : '-'} tone={scoreTone(stats.average_score, !!stats.total_tests)} />
+          <Stat label="Certified" value={stats.certified_count} />
+          <Stat label="Conditional" value={stats.conditional_count} />
+          <Stat label="Not certified" value={stats.not_certified_count} tone={stats.not_certified_count ? 'critical' : 'neutral'} />
         </div>
 
-        {/* Test History Table */}
-        <div className="glass-card" style={{ padding: '0', overflow: 'hidden' }}>
-          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
-            <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', margin: 0 }}>
-              Testing History by {u.name}
-            </h3>
+        <Panel title="Score trend" subtitle="Daily average score over the last 14 days.">
+          <div style={{ height: 200 }}>
+            {hasTrend ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={trend} margin={{ top: 8, right: 12, left: -8, bottom: 0 }}>
+                  <CartesianGrid vertical={false} />
+                  <ReferenceLine y={90} stroke="var(--color-text-muted)" strokeDasharray="4 4" />
+                  <XAxis dataKey="date" {...axisProps} />
+                  <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 90, 100]} {...axisProps} tickFormatter={v => `${v}%`} width={48} />
+                  <Tooltip content={<ChartTooltip />} cursor={{ stroke: 'var(--color-border-strong)', strokeWidth: 1 }} />
+                  <Line dataKey="score" name="Average score" {...lineProps('var(--chart-1)')} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : <EmptyState title="No tests in the last 14 days" />}
           </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="enterprise-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-              <thead>
-                <tr style={{ background: 'rgba(0,0,0,0.25)', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', textAlign: 'left' }}>
-                  <th style={{ padding: '10px 14px', fontWeight: '600' }}>Agent</th>
-                  <th style={{ padding: '10px 14px', fontWeight: '600' }}>Date</th>
-                  <th style={{ padding: '10px 14px', fontWeight: '600' }}>Mode</th>
-                  <th style={{ padding: '10px 14px', fontWeight: '600' }}>Score</th>
-                  <th style={{ padding: '10px 14px', fontWeight: '600' }}>Status</th>
-                  <th style={{ padding: '10px 14px', fontWeight: '600' }}>Duration</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((h: any) => (
-                  <tr key={h.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                    <td style={{ padding: '12px 14px', fontWeight: '700', color: 'var(--text-primary)' }}>{h.agent_name}</td>
-                    <td style={{ padding: '12px 14px', color: 'var(--text-secondary)' }}>{new Date(h.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</td>
-                    <td style={{ padding: '12px 14px', textTransform: 'uppercase', fontSize: '11px', fontWeight: '700' }}>{h.mode}</td>
-                    <td style={{ padding: '12px 14px', fontWeight: '800', color: h.tier === 'CERTIFIED' ? '#2ecc71' : h.tier === 'CONDITIONAL' ? '#f1c40f' : '#e74c3c' }}>{h.trust_score}%</td>
-                    <td style={{ padding: '12px 14px' }}>
-                      <span className={`status-pill ${h.tier.toLowerCase()}`} style={{ fontSize: '10.5px' }}>{h.tier}</span>
-                    </td>
-                    <td style={{ padding: '12px 14px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{(h.duration_ms / 1000).toFixed(1)}s</td>
+        </Panel>
+
+        <Panel title="Testing history" subtitle={`${history.length} test${history.length === 1 ? '' : 's'} run by ${u.name}.`} flush>
+          {history.length === 0 ? <EmptyState icon={Bot} title="No tests yet" /> : (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Agent</th>
+                    <th scope="col">Date</th>
+                    <th scope="col">Mode</th>
+                    <th scope="col" className="num">Score</th>
+                    <th scope="col">Result</th>
+                    <th scope="col" className="num">Duration</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                </thead>
+                <tbody>
+                  {history.map((h: any) => (
+                    <tr key={h.id}>
+                      <td><span className="cell-with-icon cell-strong"><Bot aria-hidden="true" /><span className="cell-truncate" title={h.agent_name}>{h.agent_name}</span></span></td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{new Date(h.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                      <td>{modeLabel(h.mode)}</td>
+                      <td className="num" style={{ fontWeight: 600, color: scoreColor(h.trust_score) }}>{fmtScore(h.trust_score)}%</td>
+                      <td><TierBadge tier={h.tier} /></td>
+                      <td className="num">{h.duration_ms ? `${(h.duration_ms / 1000).toFixed(1)}s` : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
 
+        {confirmModal}
       </div>
     );
   }
@@ -312,202 +275,115 @@ export const AdminUsers: React.FC = () => {
   // VIEW: MAIN USERS TABLE
   // ==========================================
   return (
-    <div className="animate-slideup" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      
-      {/* Header */}
-      <div className="glass-card" style={{ padding: '22px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
-          <h1 style={{ fontSize: '22px', fontWeight: '800', color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Users size={20} style={{ color: 'var(--accent-cyan)' }} />
-            User Management
-          </h1>
-          <p style={{ margin: '4px 0 0 0', fontSize: '13.5px', color: 'var(--text-secondary)' }}>
-            Supervise system users, assign roles (ADMIN / USER), and inspect individual testing history.
-          </p>
-        </div>
+    <div className="page-stack animate-slideup">
+      <PageHeader
+        title="Users"
+        subtitle="Manage accounts and roles, and review each person's testing history."
+        actions={
+          <>
+            <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by name or email" label="Search users" />
+            <Button variant="primary" icon={UserPlus} onClick={() => setIsAddUserOpen(true)}>Add user</Button>
+          </>
+        }
+      />
 
-        <button className="btn btn-primary" onClick={() => setIsAddUserOpen(true)} style={{ padding: '9px 18px', fontSize: '13px', gap: '6px' }}>
-          <UserPlus size={14} />
-          <span>+ Add User</span>
-        </button>
-      </div>
+      {error && <Alert tone="critical" title={error} action={<Button size="sm" onClick={fetchUsers}>Try again</Button>} />}
 
-      {/* Search Toolbar */}
-      <div className="glass-card" style={{ padding: '14px 20px' }}>
-        <div style={{ position: 'relative', maxWidth: '380px' }}>
-          <input
-            type="text"
-            className="form-input"
-            placeholder="Search users by name or email..."
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            style={{ paddingLeft: '32px', fontSize: '13px' }}
+      <Panel flush>
+        {loaded && filteredUsers.length === 0 ? (
+          <EmptyState
+            icon={Users}
+            title={users.length === 0 ? 'No users yet' : 'No users match your search'}
+            action={users.length === 0
+              ? <Button variant="primary" icon={UserPlus} onClick={() => setIsAddUserOpen(true)}>Add user</Button>
+              : <Button size="sm" onClick={() => setSearchTerm('')}>Clear search</Button>}
           />
-          <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-        </div>
-      </div>
-
-      {/* Users Table */}
-      <div className="glass-card" style={{ padding: '0', overflow: 'hidden' }}>
-        <div style={{ overflowX: 'auto' }}>
-          <table className="enterprise-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-            <thead>
-              <tr style={{ background: 'rgba(0,0,0,0.3)', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', textAlign: 'left' }}>
-                <th style={{ padding: '12px 16px', fontWeight: '600' }}>Name</th>
-                <th style={{ padding: '12px 16px', fontWeight: '600' }}>Role</th>
-                <th style={{ padding: '12px 16px', fontWeight: '600' }}>Department</th>
-                <th style={{ padding: '12px 16px', fontWeight: '600' }}>Total Tests</th>
-                <th style={{ padding: '12px 16px', fontWeight: '600' }}>Avg Score</th>
-                <th style={{ padding: '12px 16px', fontWeight: '600' }}>Status</th>
-                <th style={{ padding: '12px 16px', fontWeight: '600', textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <td colSpan={7} style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    <RefreshCw size={18} className="spin-animation" style={{ margin: '0 auto 8px auto', display: 'block' }} />
-                    Loading users...
-                  </td>
+                  <SortHeader label="Name" column="name" sort={sort} onSort={toggle} />
+                  <th scope="col">Role</th>
+                  <th scope="col">Department</th>
+                  <SortHeader label="Tests" column="tests" sort={sort} onSort={toggle} numeric />
+                  <SortHeader label="Avg score" column="score" sort={sort} onSort={toggle} numeric />
+                  <th scope="col">Status</th>
+                  <th scope="col"><span className="sr-only">Actions</span></th>
                 </tr>
-              ) : filteredUsers.map((u) => {
-                const isAdmin = u.role === 'ADMIN';
-
-                return (
+              </thead>
+              <tbody>
+                {!loaded || (isLoading && users.length === 0) ? <TableSkeleton columns={7} /> : sorted.map(u => (
                   <tr
                     key={u.id}
-                    style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', cursor: 'pointer', transition: 'background 0.15s' }}
-                    className="table-row-hover"
+                    className="clickable"
+                    tabIndex={0}
                     onClick={() => handleSelectUser(u.id)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleSelectUser(u.id); }}
                   >
-                    <td style={{ padding: '12px 16px', fontWeight: '700', color: 'var(--text-primary)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div style={{
-                          width: '28px', height: '28px', borderRadius: '50%',
-                          background: isAdmin ? 'linear-gradient(135deg, #00f0ff, #7000ff)' : 'linear-gradient(135deg, #2ecc71, #00b4d8)',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11.5px', fontWeight: '800', color: '#fff'
-                        }}>
-                          {u.name ? u.name[0].toUpperCase() : 'U'}
-                        </div>
-                        <div>
-                          <div>{u.name}</div>
-                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{u.email}</span>
+                    <td style={{ minWidth: 220 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <Avatar name={u.name} />
+                        <div style={{ minWidth: 0 }}>
+                          <div className="cell-strong">{u.name}</div>
+                          <div className="cell-sub">{u.email}</div>
                         </div>
                       </div>
                     </td>
-                    <td style={{ padding: '12px 16px' }}>
-                      <span className={`role-tag-badge ${u.role?.toLowerCase()}`} style={{
-                        padding: '2px 8px',
-                        borderRadius: '12px',
-                        fontSize: '11px',
-                        fontWeight: '700',
-                        background: isAdmin ? 'rgba(0, 240, 255, 0.15)' : 'rgba(46, 204, 113, 0.15)',
-                        color: isAdmin ? 'var(--accent-cyan)' : '#2ecc71',
-                        border: `1px solid ${isAdmin ? 'rgba(0, 240, 255, 0.3)' : 'rgba(46, 204, 113, 0.3)'}`
-                      }}>
-                        {u.role}
-                      </span>
-                    </td>
-                    <td style={{ padding: '12px 16px', color: 'var(--text-secondary)' }}>
-                      {u.department}
-                    </td>
-                    <td style={{ padding: '12px 16px', fontWeight: '700', color: 'var(--text-primary)' }}>
-                      {u.total_tests > 0 ? u.total_tests : '—'}
-                    </td>
-                    <td style={{ padding: '12px 16px', fontWeight: '700', color: u.avg_score ? '#2ecc71' : 'var(--text-muted)' }}>
-                      {u.avg_score ? `${u.avg_score}%` : '—'}
-                    </td>
-                    <td style={{ padding: '12px 16px' }}>
-                      <span className={`status-pill ${u.status === 'Active' ? 'certified' : 'not_certified'}`} style={{ fontSize: '10.5px' }}>
-                        {u.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                      <button
-                        className="btn btn-ghost"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSelectUser(u.id);
-                        }}
-                        style={{ padding: '4px 8px', fontSize: '12px', color: 'var(--accent-cyan)', gap: '4px' }}
-                      >
-                        <span>View Details</span>
-                        <ChevronRight size={13} />
-                      </button>
+                    <td><RoleBadge role={u.role} /></td>
+                    <td>{u.department || '-'}</td>
+                    <td className="num">{u.total_tests > 0 ? u.total_tests : '-'}</td>
+                    <td className="num" style={{ fontWeight: 600, color: u.avg_score ? scoreColor(u.avg_score) : 'var(--color-text-muted)' }}>{u.avg_score ? `${fmtScore(u.avg_score)}%` : '-'}</td>
+                    <td><StatusBadge status={u.status} /></td>
+                    <td className="cell-actions">
+                      <Button size="sm" variant="ghost" onClick={e => { e.stopPropagation(); handleSelectUser(u.id); }} aria-label={`View ${u.name}`}>
+                        View <ChevronRight size={14} aria-hidden="true" />
+                      </Button>
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Add User Modal */}
-      {isAddUserOpen && (
-        <div style={{
-          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.75)',
-          backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px'
-        }} onClick={() => setIsAddUserOpen(false)}>
-          <div className="glass-card animate-slideup" style={{ width: '480px', padding: '28px', gap: '16px' }} onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '17px', fontWeight: '800', color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <UserPlus size={18} style={{ color: 'var(--accent-cyan)' }} />
-                Add New User
-              </h3>
-              <button className="btn btn-ghost" onClick={() => setIsAddUserOpen(false)} style={{ padding: '4px' }}>
-                <X size={16} />
-              </button>
-            </div>
-
-            {addError && (
-              <div style={{ padding: '8px 12px', background: 'rgba(231,76,60,0.15)', border: '1px solid rgba(231,76,60,0.3)', borderRadius: '6px', color: '#e74c3c', fontSize: '12px' }}>
-                {addError}
-              </div>
-            )}
-
-            <form onSubmit={handleCreateUser} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div>
-                <label style={{ fontSize: '11.5px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Full Name:</label>
-                <input type="text" className="form-input" required value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Ismeet" />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '11.5px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Email Address:</label>
-                <input type="email" className="form-input" required value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="e.g. ismeet@certifyai.in" />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '11.5px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Password:</label>
-                <input type="password" className="form-input" required value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="password" />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '11.5px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Role (Strictly Two Roles):</label>
-                <select className="form-input" value={newRole} onChange={e => setNewRole(e.target.value as any)}>
-                  <option value="USER">USER (AI Testing & Reports)</option>
-                  <option value="ADMIN">ADMIN (Enterprise Governance)</option>
-                </select>
-              </div>
-
-              <div>
-                <label style={{ fontSize: '11.5px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Department:</label>
-                <input type="text" className="form-input" value={newDept} onChange={e => setNewDept(e.target.value)} />
-              </div>
-
-              <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setIsAddUserOpen(false)} style={{ flex: 1 }}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>
-                  Create Account
-                </button>
-              </div>
-            </form>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
-      )}
+        )}
+      </Panel>
 
+      <Modal
+        open={isAddUserOpen}
+        onClose={() => { setIsAddUserOpen(false); setAddError(''); }}
+        title="Add user"
+        description="They can sign in right away with this email and password."
+      >
+        <form id="add-user-form" onSubmit={handleCreateUser} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {addError && <Alert tone="critical" title={addError} />}
+          <Field label="Full name" required>
+            <input type="text" className="form-input" data-autofocus value={newName} onChange={e => setNewName(e.target.value)} autoComplete="off" />
+          </Field>
+          <Field label="Email" required>
+            <input type="email" className="form-input" value={newEmail} onChange={e => setNewEmail(e.target.value)} autoComplete="off" placeholder="name@company.com" />
+          </Field>
+          <Field label="Temporary password" required hint="Share it securely. They can change it from the sign-in page.">
+            <input type="password" className="form-input" value={newPassword} onChange={e => setNewPassword(e.target.value)} autoComplete="new-password" />
+          </Field>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 }}>
+            <Field label="Role" hint={newRole === 'ADMIN' ? 'Sees and manages the whole organization.' : 'Tests agents and sees their own reports.'}>
+              <select className="form-input" value={newRole} onChange={e => setNewRole(e.target.value as 'USER' | 'ADMIN')}>
+                <option value="USER">User</option>
+                <option value="ADMIN">Admin</option>
+              </select>
+            </Field>
+            <Field label="Department">
+              <input type="text" className="form-input" value={newDept} onChange={e => setNewDept(e.target.value)} placeholder="Optional" />
+            </Field>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+            <Button onClick={() => { setIsAddUserOpen(false); setAddError(''); }}>Cancel</Button>
+            <Button type="submit" variant="primary" loading={creating}>Create account</Button>
+          </div>
+        </form>
+      </Modal>
+
+      {confirmModal}
     </div>
   );
 };

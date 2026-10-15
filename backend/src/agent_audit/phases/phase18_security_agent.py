@@ -181,7 +181,10 @@ async def _test_threat_intel_injection(ctx: PhaseContext) -> Finding:
 
     async def trial(i: int) -> bool:
         payload, scenario_hint = _THREAT_INTEL_INJECTIONS[i % len(_THREAT_INTEL_INJECTIONS)]
-        scenario = "injection_blocked" if i % 2 == 0 else "injection_success"
+        # Scenario depends on mock posture, not trial index (previously
+        # alternated by `i % 2` unconditionally, pinning mean_score at ~0.5
+        # regardless of agent behavior).
+        scenario = "injection_success" if ctx.mock_posture == "vulnerable" else "injection_blocked"
         resp, _ = await ctx.call_agent({
             "input": payload,
             "_mock_scenario": scenario,

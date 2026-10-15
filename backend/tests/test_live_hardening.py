@@ -187,10 +187,21 @@ class TestSafety:
             g.authorize(p)
 
     def test_live_prod_blocks_destructive(self):
-        g = SafetyGate(env=TargetEnv.PRODUCTION, live=True)
+        g = SafetyGate(env=TargetEnv.PRODUCTION, live=True, live_authorized=True)
         with pytest.raises(SandboxViolationError):
             g.authorize("adversarial")
-        g.authorize("architecture")  # non-destructive still fine
+        g.authorize("architecture")  # non-destructive is fine once live_authorized=True
+
+    def test_live_prod_blocks_everything_without_explicit_authorization(self):
+        # v10.4: ANY live phase against PRODUCTION — not just destructive
+        # ones — requires live_authorized=True. A non-destructive phase like
+        # "architecture" must not silently run against a real production
+        # system just because mock_tools=False was passed.
+        g = SafetyGate(env=TargetEnv.PRODUCTION, live=True)
+        with pytest.raises(SandboxViolationError):
+            g.authorize("architecture")
+        with pytest.raises(SandboxViolationError):
+            g.authorize("adversarial")
 
     def test_live_unknown_fails_closed(self):
         g = SafetyGate(env=TargetEnv.UNKNOWN, live=True)

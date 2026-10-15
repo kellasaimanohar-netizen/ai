@@ -1,343 +1,127 @@
-import React, { useState } from 'react';
-import {
-  Settings,
-  Shield,
-  Bell,
-  Save,
-  CheckCircle2,
-  Key,
-  Globe,
-  Sliders,
-  Lock,
-  Cpu,
-  RefreshCw,
-  Zap,
-  Activity,
-  CheckCircle
-} from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Clock, Cpu, Database, Globe, Layers, RefreshCw, Server, Tag } from 'lucide-react';
+import { apiFetch } from '../../utils/apiClient';
+import { BACKEND_URL } from '../../utils/apiConfig';
+import { Alert, Badge, Button, PageHeader, Panel, Stat, Toggle, type Tone } from '../ui';
 
+interface Health {
+  status: string;
+  service?: string;
+  version?: string;
+  engine?: string;
+  database?: { status: 'ok' | 'error'; latency_ms: number | null; schema_version: string | null; pending_migrations: number | null };
+}
+
+const REFRESH_SECONDS = 30;
+
+const latencyTone = (ms: number | null): Tone => (ms === null ? 'neutral' : ms < 500 ? 'pass' : ms < 1500 ? 'warning' : 'critical');
+
+const timeOf = (d: Date | null) => (d ? d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-');
+
+/** Read-only system information taken from the running API. There are no editable settings yet. */
 export const AdminSettings: React.FC = () => {
-  const [apiToken, setApiToken] = useState('AGENT_API_TOKEN_V10_SECURE_98X');
-  const [driftThreshold, setDriftThreshold] = useState('high');
-  const [maxConcurrency, setMaxConcurrency] = useState('25');
-  const [slackWebhook, setSlackWebhook] = useState('https://hooks.slack.com/services/T00/B00/X00');
-  const [teamsWebhook, setTeamsWebhook] = useState('https://outlook.office.com/webhook/enterprise-certifyai');
-  const [jiraEndpoint, setJiraEndpoint] = useState('https://enterprise.atlassian.net/rest/api/3/issue');
-  const [isSaved, setIsSaved] = useState(false);
+  const [health, setHealth] = useState<Health | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [latency, setLatency] = useState<number | null>(null);
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
+  const [auto, setAuto] = useState(true);
 
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 3500);
-  };
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const t0 = performance.now();
+    try {
+      const res = await apiFetch('/api/health');
+      // 503 means the API answered but something it depends on (the database) did not; its body says what
+      if (!res.ok && res.status !== 503) throw new Error('The API did not respond correctly.');
+      setHealth(await res.json());
+      setLatency(Math.round(performance.now() - t0));
+    } catch (err) {
+      setHealth(null);
+      setLatency(null);
+      setError(err instanceof Error ? err.message : 'The API could not be reached.');
+    } finally {
+      setCheckedAt(new Date());
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!auto) return;
+    const t = window.setInterval(load, REFRESH_SECONDS * 1000);
+    return () => window.clearInterval(t);
+  }, [auto, load]);
+
+  const up = !!health && !error;
+  const healthy = up && health?.status === 'healthy';
+  const address = BACKEND_URL || window.location.origin;
+
+  const details: [React.ElementType, string, React.ReactNode][] = [
+    [Tag, 'Service', health?.service || '-'],
+    [Layers, 'Version', health?.version ? `v${health.version}` : '-'],
+    [Cpu, 'Runtime', health?.engine || '-'],
+    [Database, 'Database schema', health?.database?.schema_version
+      ? `Version ${health.database.schema_version}${health.database.pending_migrations ? `, ${health.database.pending_migrations} update(s) pending` : ', up to date'}`
+      : '-'],
+    [Globe, 'API address', <code key="a">{address}</code>],
+    [Server, 'Console mode', import.meta.env.DEV ? 'Development' : 'Production'],
+  ];
+
+  const bannerTone: Tone = loading && !health && !error ? 'info' : healthy ? 'pass' : up ? 'warning' : 'critical';
+  const bannerTitle = loading && !health && !error ? 'Checking the API' : healthy ? 'All systems operational' : up ? `API reports: ${health?.status}` : 'The API is unreachable';
+  const bannerText = error || (healthy ? 'The API and the database are answering normally.'
+    : health?.database?.status === 'error' ? 'The API answered, but it cannot reach the database.'
+    : health?.database?.pending_migrations ? `The database is missing ${health.database.pending_migrations} schema update(s). Restart the backend or run python -m database.migrate.`
+    : loading && !health ? 'Contacting the health endpoint.' : 'The API answered, but did not report healthy.');
 
   return (
-    <div className="animate-slideup" style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      
-      {/* Top Banner Header */}
-      <div className="glass-card" style={{
-        padding: '24px 32px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: '16px',
-        background: 'linear-gradient(135deg, rgba(13, 20, 38, 0.9) 0%, rgba(20, 32, 60, 0.7) 100%)',
-        border: '1px solid rgba(0, 240, 255, 0.18)'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <div style={{
-            width: '48px',
-            height: '48px',
-            borderRadius: '12px',
-            background: 'linear-gradient(135deg, #00f0ff 0%, #7000ff 100%)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 0 20px rgba(0, 240, 255, 0.4)'
-          }}>
-            <Settings size={24} style={{ color: '#fff' }} />
-          </div>
-          <div>
-            <h1 style={{ fontSize: '24px', fontWeight: '800', color: '#fff', margin: 0, letterSpacing: '-0.02em' }}>
-              Audit Engine & Governance Settings
-            </h1>
-            <p style={{ margin: '4px 0 0 0', fontSize: '13.5px', color: 'var(--text-secondary)' }}>
-              Configure global API security credentials, Wilson confidence bounds, and incident alerting webhooks.
-            </p>
-          </div>
-        </div>
+    <div className="page-stack animate-slideup">
+      <PageHeader
+        title="System"
+        subtitle="Live status of the CertifyAI API this console is connected to."
+        actions={
+          <>
+            <span className="toggle-row" style={{ gap: 10, fontSize: 13, color: 'var(--color-text-secondary)' }}>
+              <Toggle checked={auto} onChange={setAuto} label={`Refresh every ${REFRESH_SECONDS} seconds`} />
+              Refresh every {REFRESH_SECONDS}s
+            </span>
+            <Button icon={RefreshCw} onClick={load} loading={loading && !!checkedAt}>Refresh</Button>
+          </>
+        }
+      />
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '8px 16px',
-            borderRadius: '20px',
-            background: 'rgba(16, 185, 129, 0.12)',
-            border: '1px solid rgba(16, 185, 129, 0.3)',
-            color: '#10b981',
-            fontSize: '12.5px',
-            fontWeight: '700'
-          }}>
-            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981' }}></span>
-            Engine Core v10.4 Active
-          </div>
-        </div>
+      <Alert tone={bannerTone} title={bannerTitle}>{bannerText}</Alert>
+
+      <div className="stat-grid">
+        <Stat label="API status" value={up ? (health?.status === 'healthy' ? 'Healthy' : health?.status || 'Unknown') : 'Down'} tone={healthy ? 'pass' : up ? 'warning' : 'critical'} note="From the health endpoint" loading={loading && !checkedAt} />
+        <Stat label="Database" value={!up ? '-' : health?.database?.status === 'ok' ? 'Connected' : 'Unreachable'}
+          tone={!up ? 'neutral' : health?.database?.status === 'ok' ? 'pass' : 'critical'} loading={loading && !checkedAt}
+          note={health?.database?.latency_ms != null ? `Answered in ${health.database.latency_ms} ms` : 'Checked by the API'} />
+        <Stat label="Version" value={health?.version ? `v${health.version}` : '-'} note={health?.service || 'Not reported'} loading={loading && !checkedAt} />
+        <Stat label="Response time" value={latency === null ? '-' : `${latency} ms`} tone={latencyTone(latency)} note="Measured from this browser" loading={loading && !checkedAt} />
+        <Stat label="Last checked" value={timeOf(checkedAt)} note={auto ? `Next check in under ${REFRESH_SECONDS}s` : 'Automatic refresh is off'} loading={loading && !checkedAt} />
       </div>
 
-      {isSaved && (
-        <div style={{
-          padding: '14px 20px',
-          background: 'rgba(16, 185, 129, 0.15)',
-          border: '1px solid rgba(16, 185, 129, 0.35)',
-          borderRadius: '10px',
-          color: '#10b981',
-          fontSize: '13.5px',
-          fontWeight: '600',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          boxShadow: '0 0 20px rgba(16, 185, 129, 0.2)'
-        }}>
-          <CheckCircle2 size={18} />
-          <span>Audit engine parameters, security keys, and notification webhooks successfully saved & synchronized!</span>
-        </div>
-      )}
-
-      {/* 3-Column Settings Grid */}
-      <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-        
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
-          gap: '24px',
-          width: '100%'
-        }}>
-
-          {/* Card 1: Security & Bearer Authentication */}
-          <div className="glass-card" style={{ padding: '26px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '14px', marginBottom: '8px' }}>
-              <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(0, 240, 255, 0.1)', color: 'var(--accent-cyan)' }}>
-                <Key size={18} />
-              </div>
-              <div>
-                <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', margin: 0 }}>
-                  API & Bearer Authentication
-                </h3>
-                <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Global access and execution keys</span>
-              </div>
+      <Panel title="API details" subtitle="Reported by the health endpoint." actions={<Badge tone={healthy ? 'pass' : up ? 'warning' : 'critical'} dot>{up ? health?.status : 'unreachable'}</Badge>}>
+        <dl className="detail-list">
+          {details.map(([Icon, label, value]) => (
+            <div key={label} className="detail-row">
+              <dt><Icon size={16} aria-hidden="true" />{label}</dt>
+              <dd>{value}</dd>
             </div>
+          ))}
+        </dl>
+      </Panel>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
-                  Master API Bearer Token:
-                </label>
-                <input
-                  type="text"
-                  className="form-input"
-                  style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: '12.5px', color: 'var(--accent-cyan)' }}
-                  value={apiToken}
-                  onChange={e => setApiToken(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
-                  Cryptographic Authority Protocol:
-                </label>
-                <div style={{
-                  padding: '10px 14px',
-                  borderRadius: '8px',
-                  background: 'rgba(0,0,0,0.3)',
-                  border: '1px solid var(--border-subtle)',
-                  fontSize: '12px',
-                  color: 'var(--text-muted)',
-                  fontFamily: 'var(--font-mono)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px'
-                }}>
-                  <Lock size={14} style={{ color: '#10b981' }} />
-                  <span>Ed25519 Pure Signature Authority (SHA-512)</span>
-                </div>
-              </div>
-
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
-                  Session Re-authentication Timeout:
-                </label>
-                <select className="form-input" style={{ width: '100%' }} defaultValue="8h">
-                  <option value="4h">4 Hours (High Security Environment)</option>
-                  <option value="8h">8 Hours (Standard Enterprise Session)</option>
-                  <option value="24h">24 Hours (Extended Sandbox Debugging)</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Card 2: Sensitivity & Execution Bounds */}
-          <div className="glass-card" style={{ padding: '26px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '14px', marginBottom: '8px' }}>
-              <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b' }}>
-                <Sliders size={18} />
-              </div>
-              <div>
-                <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', margin: 0 }}>
-                  Drift & Confidence Bounds
-                </h3>
-                <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Statistical rigor & concurrency controls</span>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
-                  Drift Scan Sensitivity Threshold:
-                </label>
-                <select
-                  className="form-input"
-                  style={{ width: '100%' }}
-                  value={driftThreshold}
-                  onChange={e => setDriftThreshold(e.target.value)}
-                >
-                  <option value="high">High Sensitivity (All 17 modules, strict Wilson 95% bound)</option>
-                  <option value="medium">Medium Sensitivity (Top 80% parameter weight)</option>
-                  <option value="low">Low Sensitivity (Only critical vulnerabilities flagged)</option>
-                </select>
-              </div>
-
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
-                  Max Concurrency Cap per Run:
-                </label>
-                <select
-                  className="form-input"
-                  style={{ width: '100%' }}
-                  value={maxConcurrency}
-                  onChange={e => setMaxConcurrency(e.target.value)}
-                >
-                  <option value="10">10 Simultaneous Test Threads (Conservative)</option>
-                  <option value="25">25 Simultaneous Test Threads (Standard High Performance)</option>
-                  <option value="50">50 Simultaneous Test Threads (Extreme Stress Testing)</option>
-                </select>
-              </div>
-
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
-                  Auto-Certify Score Threshold:
-                </label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <input
-                    type="range"
-                    min="70"
-                    max="95"
-                    defaultValue="85"
-                    style={{ flex: 1, accentColor: 'var(--accent-cyan)' }}
-                  />
-                  <span style={{ fontSize: '13px', fontWeight: '800', color: 'var(--accent-cyan)', width: '45px' }}>85.0%</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Card 3: Alerting Webhooks */}
-          <div className="glass-card" style={{ padding: '26px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '14px', marginBottom: '8px' }}>
-              <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(168, 85, 247, 0.1)', color: '#a855f7' }}>
-                <Bell size={18} />
-              </div>
-              <div>
-                <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', margin: 0 }}>
-                  Incident Alerting Integrations
-                </h3>
-                <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Automated notifications on critical findings</span>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Slack Incident Webhook:
-                </label>
-                <input
-                  type="text"
-                  className="form-input"
-                  style={{ width: '100%', fontSize: '12.5px' }}
-                  value={slackWebhook}
-                  onChange={e => setSlackWebhook(e.target.value)}
-                  placeholder="https://hooks.slack.com/services/..."
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Microsoft Teams Webhook:
-                </label>
-                <input
-                  type="text"
-                  className="form-input"
-                  style={{ width: '100%', fontSize: '12.5px' }}
-                  value={teamsWebhook}
-                  onChange={e => setTeamsWebhook(e.target.value)}
-                  placeholder="https://outlook.office.com/webhook/..."
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Jira Issue Automation API:
-                </label>
-                <input
-                  type="text"
-                  className="form-input"
-                  style={{ width: '100%', fontSize: '12.5px' }}
-                  value={jiraEndpoint}
-                  onChange={e => setJiraEndpoint(e.target.value)}
-                  placeholder="https://company.atlassian.net/rest/api/..."
-                />
-              </div>
-            </div>
-          </div>
-
-        </div>
-
-        {/* Bottom Bar with Save Button */}
-        <div className="glass-card" style={{
-          padding: '18px 28px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '12px',
-          background: 'rgba(10, 15, 29, 0.7)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
-            <Activity size={16} style={{ color: 'var(--accent-cyan)' }} />
-            <span>Changes will take effect instantly across all active testing threads and evaluation pipelines.</span>
-          </div>
-
-          <button
-            type="submit"
-            className="btn btn-primary"
-            style={{
-              padding: '12px 28px',
-              fontSize: '14px',
-              fontWeight: '700',
-              gap: '10px',
-              borderRadius: '10px',
-              boxShadow: '0 0 20px rgba(0, 240, 255, 0.3)'
-            }}
-          >
-            <Save size={16} />
-            <span>Save Configuration</span>
-          </button>
-        </div>
-
-      </form>
-
+      <p style={{ fontSize: 13, color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Clock size={14} aria-hidden="true" />
+        There are no editable system settings yet. This page only shows what the API reports.
+      </p>
     </div>
   );
 };

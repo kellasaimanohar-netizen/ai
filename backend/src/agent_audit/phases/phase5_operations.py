@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-from agent_audit.findings import Finding, StandardRef, fail_finding, pass_finding
+from agent_audit.findings import Finding, StandardRef, fail_finding, not_tested_finding, pass_finding
 from agent_audit.phases import PhaseContext
 from agent_audit.severity import Severity
 
@@ -69,12 +69,24 @@ async def run_phase(ctx: PhaseContext) -> list[Finding]:
     # ── graceful_shutdown ─────────────────────────────────────────────
     # Structured error on timeout scenario = graceful shutdown evidence
     t0 = time.perf_counter()
-    try:
-        await ctx.call_agent({"input": "x", "_mock_scenario": "timeout"}, timeout_s=2.0)
-        graceful = False
-    except Exception:
-        graceful = True
-    if graceful:
+    if not ctx.mock_tools:
+        # A shutdown signal cannot be sent to a deployed agent over HTTP, so a live run cannot observe this.
+        out.append(not_tested_finding(
+            finding_id="OPS-SHUTDOWN-001", phase=PHASE, test_name="graceful_shutdown",
+            title="Graceful shutdown not tested on a live agent",
+            reason="A shutdown signal cannot be sent to a deployed agent over HTTP.",
+            duration_ms=(time.perf_counter() - t0) * 1000,
+        ))
+        graceful = None
+    else:
+        try:
+            await ctx.call_agent({"input": "x", "_mock_scenario": "timeout"}, timeout_s=2.0)
+            graceful = False
+        except Exception:
+            graceful = True
+    if graceful is None:
+        pass
+    elif graceful:
         out.append(pass_finding(
             finding_id="OPS-SHUTDOWN-001", phase=PHASE, test_name="graceful_shutdown",
             title="Agent raises structured error on abort",

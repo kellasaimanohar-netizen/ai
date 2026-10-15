@@ -1,21 +1,7 @@
-import React, { useState } from 'react';
-import {
-  Shield,
-  Lock,
-  Mail,
-  Eye,
-  EyeOff,
-  ArrowRight,
-  Sun,
-  Moon,
-  Users,
-  AlertCircle,
-  Globe,
-  ChevronDown,
-  BarChart3,
-  Settings,
-  FileText
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, Eye, EyeOff, Moon, Shield, Sun, TriangleAlert, User } from 'lucide-react';
+import { BACKEND_URL } from '../utils/apiConfig';
+import { saveSession } from '../utils/session';
 
 export interface AdminUser {
   id: number;
@@ -38,44 +24,145 @@ interface AdminLoginProps {
   portalMode?: 'admin' | 'user';
 }
 
-export const AdminLogin: React.FC<AdminLoginProps> = ({
-  onLoginSuccess,
-  isDarkMode,
-  setIsDarkMode,
-  portalMode = 'admin'
-}) => {
-  // Tabs: 'admin' (Admin Login) or 'user' (User Login)
-  const [activeTab, setActiveTab] = useState<'admin' | 'user'>(
-    portalMode === 'user' ? 'user' : 'admin'
+/** An illustration of what a report shows. Labelled as an example on the page, so it is never read as live data. */
+const EXAMPLE_CHECKS: { label: string; result: 'pass' | 'review' }[] = [
+  { label: 'Prompt-injection resistance', result: 'pass' },
+  { label: 'Data governance', result: 'pass' },
+  { label: 'Fairness and bias', result: 'review' },
+];
+const EXAMPLE_SCORE = 90;
+
+type Role = 'USER' | 'ADMIN';
+type View = 'login' | 'forgot' | 'reset';
+
+const MIN_PASSWORD_LENGTH = 8;
+
+/** The link in the reset email opens /reset-password?token=... */
+const resetTokenFromUrl = (): string | null =>
+  window.location.pathname.replace(/\/$/, '').toLowerCase() === '/reset-password'
+    ? new URLSearchParams(window.location.search).get('token')
+    : null;
+
+const postJson = async (path: string, body: unknown) => {
+  const res = await fetch(`${BACKEND_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || 'Something went wrong. Try again.');
+  return data;
+};
+
+/**
+ * Development only. The buttons fill the real accounts below. Passwords are never in the code:
+ * put them in frontend/.env.local (not committed) as VITE_DEV_USER_PASSWORD and VITE_DEV_ADMIN_PASSWORD.
+ * import.meta.env.DEV is false in a production build, so none of this reaches it.
+ */
+const DEV_LOGINS: Record<Role, { label: string; email: string; password: string }> | null = import.meta.env.DEV
+  ? {
+      USER: { label: 'Ismeet', email: import.meta.env.VITE_DEV_USER_EMAIL || 'ismeet@certifyai.in', password: import.meta.env.VITE_DEV_USER_PASSWORD || '' },
+      ADMIN: { label: 'Syed', email: import.meta.env.VITE_DEV_ADMIN_EMAIL || 'syed@certifyai.in', password: import.meta.env.VITE_DEV_ADMIN_PASSWORD || '' },
+    }
+  : null;
+
+/** Circular score gauge for the example report. */
+const ScoreRing: React.FC<{ value: number }> = ({ value }) => {
+  const r = 54;
+  const c = 2 * Math.PI * r;
+  return (
+    <div className="auth-ring">
+      <svg viewBox="0 0 128 128" aria-hidden="true">
+        <circle cx="64" cy="64" r={r} className="auth-ring-track" />
+        <circle cx="64" cy="64" r={r} className="auth-ring-value" strokeDasharray={c} strokeDashoffset={c * (1 - value / 100)} />
+      </svg>
+      <div className="auth-ring-label">
+        <strong>{value}</strong>
+        <span>Trust score</span>
+      </div>
+    </div>
   );
+};
 
-  const [email, setEmail] = useState(() => {
-    return portalMode === 'user' ? 'user@company.com' : 'admin@company.com';
-  });
-  const [password, setPassword] = useState(() => {
-    return portalMode === 'user' ? 'user' : 'admin';
-  });
-
+export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, isDarkMode, setIsDarkMode }) => {
+  const [role, setRole] = useState<Role>('USER');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [showLangMenu, setShowLangMenu] = useState(false);
-  const [selectedLang, setSelectedLang] = useState('English');
-  const [mfaActive, setMfaActive] = useState(false);
+  const [capsOn, setCapsOn] = useState(false);
+  const [resetToken] = useState<string | null>(resetTokenFromUrl);
+  const [view, setView] = useState<View>(resetToken ? 'reset' : 'login');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [resetEmail, setResetEmail] = useState<string | null>(null);
+  const [tokenChecked, setTokenChecked] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
-  const BACKEND_URL = import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== '' ? import.meta.env.VITE_API_URL : (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '');
+  useEffect(() => {
+    if (!resetToken) return;
+    postJson('/api/auth/reset-password/verify', { token: resetToken })
+      .then(d => {
+        if (d.valid) setResetEmail(d.email);
+        else setErrorMessage('This reset link is invalid, expired or already used. Request a new one.');
+      })
+      .catch(() => setErrorMessage('Unable to check the reset link. Make sure the server is running.'))
+      .finally(() => setTokenChecked(true));
+  }, [resetToken]);
 
-  const handleTabChange = (tab: 'admin' | 'user') => {
-    setActiveTab(tab);
+  const goTo = (next: View) => {
     setErrorMessage(null);
-    if (tab === 'admin') {
-      setEmail('admin@company.com');
-      setPassword('admin');
-    } else {
-      setEmail('user@company.com');
-      setPassword('user');
+    setNotice(null);
+    setView(next);
+    if (window.location.pathname !== '/login') window.history.replaceState(null, '', '/login');
+  };
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setErrorMessage(null);
+    try {
+      const d = await postJson('/api/auth/forgot-password', { email: email.trim().toLowerCase() });
+      setNotice(d.message);
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    } finally {
+      setIsLoading(false);
     }
+  };
+
+  const handleResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setErrorMessage('The two passwords do not match.');
+      return;
+    }
+    setIsLoading(true);
+    setErrorMessage(null);
+    try {
+      const d = await postJson('/api/auth/reset-password', { token: resetToken, new_password: newPassword });
+      window.history.replaceState(null, '', '/login');
+      if (resetEmail) setEmail(resetEmail);
+      setPassword('');
+      setView('login');
+      setNotice(d.message);
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const devLogin = DEV_LOGINS?.[role];
+
+  const autofill = () => {
+    if (!devLogin) return;
+    setEmail(devLogin.email);
+    setPassword(devLogin.password);
+    setErrorMessage(null);
+    if (!devLogin.password) document.getElementById('login-password')?.focus();
   };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -83,20 +170,11 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
     setIsLoading(true);
     setErrorMessage(null);
 
-    const rawEmail = email.trim().toLowerCase();
-    const isUserAccount = activeTab === 'user' || rawEmail.includes('user') || rawEmail.includes('ismeet');
-    const effectiveRole: 'ADMIN' | 'USER' = isUserAccount ? 'USER' : 'ADMIN';
-
-    // Map email for backend call
-    const sendEmail = isUserAccount
-      ? (rawEmail === 'user@company.com' || rawEmail === 'user' ? 'ismeet@certifyai.in' : rawEmail)
-      : (rawEmail === 'admin@company.com' || rawEmail === 'admin' ? 'syed@certifyai.in' : rawEmail);
-
     try {
       const response = await fetch(`${BACKEND_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: sendEmail, password, remember_me: rememberMe })
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password, remember_me: rememberMe, role }),
       });
 
       if (!response.ok) {
@@ -106,808 +184,232 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
 
       const data = await response.json();
       const userData = data.user || data;
-      localStorage.setItem('certifyai_admin_user', JSON.stringify(userData));
-      localStorage.setItem('certifyai_admin_token', data.token);
+      saveSession(userData, data.token, rememberMe);
       onLoginSuccess(userData, data.token);
     } catch (err: any) {
-      // Fallback if backend server is unreachable
-      if (err.message?.includes('fetch') || err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError') || !err.message) {
-        const fallbackUser: AdminUser = effectiveRole === 'ADMIN' ? {
-          id: 1,
-          name: 'Syed',
-          email: 'syed@certifyai.in',
-          role: 'ADMIN',
-          department: 'Enterprise AI Governance',
-          avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-          status: 'Active'
-        } : {
-          id: 2,
-          name: 'Ismeet',
-          email: 'ismeet@certifyai.in',
-          role: 'USER',
-          department: 'AI Quality Assurance & Testing',
-          avatar_url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-          status: 'Active'
-        };
-        localStorage.setItem('certifyai_admin_user', JSON.stringify(fallbackUser));
-        localStorage.setItem('certifyai_admin_token', 'local-demo-token');
-        onLoginSuccess(fallbackUser, 'local-demo-token');
-        return;
-      }
-      setErrorMessage(err.message || 'Unable to connect to authentication server.');
+      setErrorMessage(err.message || 'Unable to connect to the authentication server.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const isAdminTab = activeTab === 'admin';
+  const messages = (
+    <>
+      {notice && (
+        <div className="auth-msg ok" role="status">
+          <CheckCircle2 size={16} aria-hidden="true" />
+          <span>{notice}{view === 'forgot' ? ' Check your inbox and spam folder.' : ''}</span>
+        </div>
+      )}
+      {errorMessage && (
+        <div className="auth-msg error" role="alert">
+          <AlertCircle size={16} aria-hidden="true" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+    </>
+  );
+
+  const passwordToggle = (
+    <button type="button" className="auth-eye" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'}>
+      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+    </button>
+  );
 
   return (
-    <div style={{
-      height: '100vh',
-      maxHeight: '100vh',
-      width: '100%',
-      backgroundColor: isDarkMode ? '#060a14' : '#f8fafc',
-      color: isDarkMode ? '#f8fafc' : '#0f172a',
-      display: 'flex',
-      flexDirection: 'column',
-      fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-      position: 'relative',
-      overflow: 'hidden'
-    }}>
-
-      {/* ── TOP NAVIGATION BAR ─────────────────────────────────────── */}
-      <header style={{
-        height: '56px',
-        padding: '0 32px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        zIndex: 20,
-        flexShrink: 0,
-        background: isDarkMode ? 'rgba(6, 10, 20, 0.7)' : 'rgba(255, 255, 255, 0.8)',
-        backdropFilter: 'blur(10px)',
-        borderBottom: isDarkMode ? '1px solid rgba(255, 255, 255, 0.06)' : '1px solid rgba(0, 0, 0, 0.06)'
-      }}>
-        {/* Brand Logo & Slogan */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-            <div style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: '8px',
-              background: 'linear-gradient(135deg, #0070f3 0%, #00f0ff 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 3px 14px rgba(0, 112, 243, 0.4)',
-              color: '#ffffff',
-              fontWeight: '900',
-              fontSize: '16px'
-            }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <path d="M12 3L2 20H22L12 3Z" fill="#ffffff" />
-                <path d="M12 8L6 18H18L12 8Z" fill="#060a14" opacity="0.85" />
-              </svg>
+    <div className="auth">
+      <div className="auth-grid">
+        {/* Left: what the product does */}
+        <section className="auth-hero" aria-label="About CertifyAI">
+          <header className="auth-col auth-col-head">
+            <div className="auth-brand">
+              <span className="auth-brand-mark"><Shield size={22} aria-hidden="true" /></span>
+              CertifyAI
             </div>
+          </header>
 
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '16px', fontWeight: '800', letterSpacing: '-0.3px', color: isDarkMode ? '#ffffff' : '#0f172a' }}>
-                  CertifyAI
-                </span>
-                <span style={{
-                  fontSize: '10px',
-                  fontWeight: '800',
-                  color: '#38bdf8',
-                  background: 'rgba(56, 189, 248, 0.15)',
-                  padding: '1px 5px',
-                  borderRadius: '4px',
-                  border: '1px solid rgba(56, 189, 248, 0.3)'
-                }}>
-                  V10
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Top Right Controls: Slogan + Theme + Language */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{
-            fontSize: '11.5px',
-            color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : '#64748b',
-            fontWeight: '500',
-            marginRight: '8px'
-          }}>
-            Secure &nbsp;|&nbsp; Compliant &nbsp;|&nbsp; Responsible &nbsp;|&nbsp; Scalable
-          </div>
-
-          {/* Theme Pill Toggle */}
-          <button
-            type="button"
-            onClick={() => setIsDarkMode(!isDarkMode)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              background: isDarkMode ? 'rgba(255, 255, 255, 0.08)' : '#ffffff',
-              border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.15)' : '1px solid #cbd5e1',
-              borderRadius: '20px',
-              padding: '3px',
-              cursor: 'pointer',
-              color: isDarkMode ? '#f8fafc' : '#0f172a',
-              transition: 'all 0.2s ease',
-              boxShadow: '0 2px 6px rgba(0,0,0,0.08)'
-            }}
-            title="Toggle theme mode"
-          >
-            <div style={{
-              padding: '3px 6px',
-              borderRadius: '12px',
-              background: !isDarkMode ? '#3b82f6' : 'transparent',
-              color: !isDarkMode ? '#ffffff' : '#94a3b8',
-              display: 'flex',
-              alignItems: 'center',
-              transition: 'all 0.2s ease'
-            }}>
-              <Sun size={12} />
-            </div>
-            <div style={{
-              padding: '3px 6px',
-              borderRadius: '12px',
-              background: isDarkMode ? '#3b82f6' : 'transparent',
-              color: isDarkMode ? '#ffffff' : '#94a3b8',
-              display: 'flex',
-              alignItems: 'center',
-              transition: 'all 0.2s ease'
-            }}>
-              <Moon size={12} />
-            </div>
-          </button>
-
-          {/* Language Selector */}
-          <div style={{ position: 'relative' }}>
-            <button
-              type="button"
-              onClick={() => setShowLangMenu(!showLangMenu)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '4px 10px',
-                borderRadius: '6px',
-                background: isDarkMode ? 'rgba(255, 255, 255, 0.08)' : '#ffffff',
-                border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.15)' : '1px solid #cbd5e1',
-                color: isDarkMode ? '#f8fafc' : '#0f172a',
-                fontSize: '11.5px',
-                fontWeight: '500',
-                cursor: 'pointer',
-                boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
-              }}
-            >
-              <Globe size={13} style={{ color: '#38bdf8' }} />
-              <span>{selectedLang}</span>
-              <ChevronDown size={12} />
-            </button>
-
-            {showLangMenu && (
-              <div style={{
-                position: 'absolute',
-                top: '110%',
-                right: 0,
-                background: isDarkMode ? '#0f172a' : '#ffffff',
-                border: isDarkMode ? '1px solid rgba(255,255,255,0.1)' : '1px solid #e2e8f0',
-                borderRadius: '8px',
-                padding: '4px',
-                boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
-                zIndex: 30,
-                minWidth: '120px'
-              }}>
-                {['English', 'German', 'French', 'Japanese'].map(lang => (
-                  <button
-                    key={lang}
-                    onClick={() => { setSelectedLang(lang); setShowLangMenu(false); }}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '6px 12px',
-                      background: selectedLang === lang ? 'rgba(56, 189, 248, 0.15)' : 'none',
-                      border: 'none',
-                      borderRadius: '6px',
-                      color: selectedLang === lang ? '#38bdf8' : (isDarkMode ? '#f8fafc' : '#0f172a'),
-                      fontSize: '12px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {lang}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* ── MAIN SPLIT CONTENT BODY ─────────────────────────────────── */}
-      <main style={{
-        flex: 1,
-        minHeight: 0,
-        display: 'grid',
-        gridTemplateColumns: '1.2fr 1fr',
-        position: 'relative',
-        overflow: 'hidden'
-      }}>
-
-        {/* ── LEFT HERO PANEL (Mountain Beacon Landscape) ─────────────── */}
-        <section style={{
-          position: 'relative',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          padding: '24px 48px',
-          backgroundImage: 'url(/login_hero_bg.jpg)',
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          color: '#ffffff',
-          overflow: 'hidden'
-        }}>
-          {/* Dark gradient overlay for rich contrast */}
-          <div style={{
-            position: 'absolute',
-            inset: 0,
-            background: 'linear-gradient(135deg, rgba(6, 10, 20, 0.88) 0%, rgba(10, 16, 32, 0.72) 50%, rgba(6, 10, 20, 0.92) 100%)',
-            pointerEvents: 'none'
-          }} />
-
-          {/* Hero Content Container */}
-          <div style={{ position: 'relative', zIndex: 10, maxWidth: '560px', marginTop: 'auto', marginBottom: 'auto' }}>
-            
-            {/* Big Headline */}
-            <h1 style={{
-              fontSize: 'clamp(30px, 3.2vw, 44px)',
-              fontWeight: '900',
-              lineHeight: '1.15',
-              letterSpacing: '-1.2px',
-              margin: '0 0 12px 0',
-              color: '#ffffff'
-            }}>
-              Admin Access.<br />
-              <span style={{ color: '#38bdf8' }}>
-                Control the Future.
-              </span>
-            </h1>
-
-            {/* Sub-paragraph */}
-            <p style={{
-              fontSize: 'clamp(13px, 1.1vw, 15px)',
-              lineHeight: '1.55',
-              color: 'rgba(255, 255, 255, 0.8)',
-              margin: '0 0 24px 0',
-              fontWeight: '400',
-              maxWidth: '480px'
-            }}>
-              Manage, monitor, and govern AI agent compliance across your organization with enterprise-grade security and insights.
+          <div className="auth-col auth-hero-body">
+            <div className="auth-eyebrow"><span className="auth-eyebrow-dot" aria-hidden="true" />Trust layer for autonomous AI</div>
+            <h1 className="auth-title">Every agent, verified before it <span className="auth-accent">acts.</span></h1>
+            <p className="auth-lead">
+              Audit autonomous agents across 22 risk areas, issue signed certificates, and monitor them in production, all in one place.
             </p>
 
-            {/* 4 Feature Cards Row */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, 1fr)',
-              gap: '10px',
-              marginBottom: '24px'
-            }}>
-              {[
-                { label: 'User & Access Control', icon: <Shield size={15} color="#38bdf8" /> },
-                { label: 'Platform Analytics', icon: <BarChart3 size={15} color="#34d399" /> },
-                { label: 'System Configuration', icon: <Settings size={15} color="#a78bfa" /> },
-                { label: 'Audit Logs & Reports', icon: <FileText size={15} color="#fb923c" /> }
-              ].map((feat, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    background: 'rgba(15, 23, 42, 0.65)',
-                    backdropFilter: 'blur(12px)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    borderRadius: '10px',
-                    padding: '10px 8px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    textAlign: 'center',
-                    gap: '6px',
-                    transition: 'all 0.2s ease',
-                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.25)'
-                  }}
-                  className="table-row-hover"
-                >
-                  <div style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '6px',
-                    background: 'rgba(255, 255, 255, 0.08)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}>
-                    {feat.icon}
-                  </div>
-                  <span style={{ fontSize: '10.5px', fontWeight: '600', color: '#e2e8f0', lineHeight: '1.25' }}>
-                    {feat.label}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            {/* Bottom Slogan with Accent Underline */}
-            <div>
-              <div style={{
-                fontSize: '13.5px',
-                fontWeight: '600',
-                color: '#ffffff',
-                letterSpacing: '-0.2px'
-              }}>
-                Trust AI. Govern with Confidence.
+            <figure className="auth-example">
+              <ScoreRing value={EXAMPLE_SCORE} />
+              <div className="auth-example-body">
+                <ul className="auth-checks">
+                  {EXAMPLE_CHECKS.map(c => (
+                    <li key={c.label}>
+                      {c.result === 'pass'
+                        ? <Check size={16} className="auth-check-icon pass" aria-hidden="true" />
+                        : <TriangleAlert size={16} className="auth-check-icon review" aria-hidden="true" />}
+                      <span>{c.label}</span>
+                      <span className={`auth-check-result ${c.result}`}>{c.result === 'pass' ? 'Pass' : 'Review'}</span>
+                    </li>
+                  ))}
+                </ul>
+                <figcaption className="auth-standards">
+                  Example report. Findings map to OWASP · NIST AI RMF · MITRE ATLAS · EU AI Act
+                </figcaption>
               </div>
-              <div style={{
-                width: '32px',
-                height: '3px',
-                borderRadius: '2px',
-                background: '#38bdf8',
-                marginTop: '5px'
-              }} />
-            </div>
-
+            </figure>
           </div>
         </section>
 
-        {/* ── RIGHT AUTHENTICATION PANEL ─────────────────────────────── */}
-        <section style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '16px 28px',
-          background: isDarkMode ? '#060a14' : '#f1f5f9',
-          position: 'relative',
-          zIndex: 10,
-          overflow: 'hidden'
-        }}>
+        {/* Right: the form */}
+        <main className="auth-panel">
+          <div className="auth-theme" role="group" aria-label="Theme">
+            <button type="button" aria-pressed={!isDarkMode} className={!isDarkMode ? 'active' : ''} onClick={() => setIsDarkMode(false)}><Sun size={14} aria-hidden="true" />Light</button>
+            <button type="button" aria-pressed={isDarkMode} className={isDarkMode ? 'active' : ''} onClick={() => setIsDarkMode(true)}><Moon size={14} aria-hidden="true" />Dark</button>
+          </div>
 
-          {/* Login Card */}
-          <div style={{
-            width: '100%',
-            maxWidth: '420px',
-            background: isDarkMode ? '#0d1527' : '#ffffff',
-            border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid #e2e8f0',
-            borderRadius: '16px',
-            padding: '24px 28px 20px 28px',
-            boxShadow: isDarkMode
-              ? '0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(0, 112, 243, 0.08)'
-              : '0 16px 36px rgba(15, 23, 42, 0.08)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '14px'
-          }}>
+          <div className="auth-panel-body">
+            {view === 'login' && (
+              <form className="auth-form" onSubmit={handleLoginSubmit}>
+                <div>
+                  <h2 className="auth-heading">Welcome back</h2>
+                  <p className="auth-sub">Sign in to your workspace to continue.</p>
+                </div>
 
-            {/* Header: Delta Logo + Title + Subtitle */}
-            <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <div style={{
-                width: '38px',
-                height: '38px',
-                borderRadius: '10px',
-                background: 'linear-gradient(135deg, #0070f3 0%, #4f46e5 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 6px 18px rgba(0, 112, 243, 0.35)',
-                marginBottom: '8px'
-              }}>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                  <path d="M12 3L2 20H22L12 3Z" fill="#ffffff" />
-                  <path d="M12 8L6 18H18L12 8Z" fill="#0d1527" opacity="0.9" />
-                </svg>
-              </div>
+                <div className="auth-tabs" role="tablist" aria-label="Account type">
+                  <button type="button" role="tab" aria-selected={role === 'USER'} onClick={() => setRole('USER')}>Team member</button>
+                  <button type="button" role="tab" aria-selected={role === 'ADMIN'} onClick={() => setRole('ADMIN')}>Administrator</button>
+                </div>
 
-              <h2 style={{
-                fontSize: '20px',
-                fontWeight: '800',
-                margin: '0 0 4px 0',
-                color: isDarkMode ? '#f8fafc' : '#0f172a',
-                letterSpacing: '-0.3px'
-              }}>
-                {isAdminTab ? 'Admin Login' : 'User Login'}
-              </h2>
+                {messages}
 
-              <p style={{
-                fontSize: '12px',
-                color: isDarkMode ? '#94a3b8' : '#64748b',
-                margin: 0
-              }}>
-                {isAdminTab
-                  ? 'Access the CertifyAI administration console'
-                  : 'Access the AI Agent Testing & Quality Studio'
-                }
-              </p>
-            </div>
+                {DEV_LOGINS && (
+                  <button type="button" className="auth-btn ghost" onClick={autofill}>
+                    <User size={15} aria-hidden="true" />Autofill {role === 'ADMIN' ? 'admin' : 'user'} (development)
+                  </button>
+                )}
 
-            {/* Clean Tabs: [ 🛡️ Admin Login ] [ 👤 User Login ] */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              background: isDarkMode ? 'rgba(15, 23, 42, 0.7)' : '#f1f5f9',
-              padding: '3px',
-              borderRadius: '10px',
-              border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.08)' : '1px solid #e2e8f0',
-              gap: '4px'
-            }}>
-              <button
-                type="button"
-                onClick={() => handleTabChange('admin')}
-                style={{
-                  padding: '7px 10px',
-                  borderRadius: '7px',
-                  border: 'none',
-                  background: isAdminTab
-                    ? '#2563eb'
-                    : 'transparent',
-                  color: isAdminTab ? '#ffffff' : (isDarkMode ? '#94a3b8' : '#64748b'),
-                  fontSize: '12px',
-                  fontWeight: '700',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                  transition: 'all 0.2s ease',
-                  boxShadow: isAdminTab ? '0 2px 8px rgba(37, 99, 235, 0.4)' : 'none'
-                }}
-              >
-                <Shield size={13} />
-                <span>Admin Login</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleTabChange('user')}
-                style={{
-                  padding: '7px 10px',
-                  borderRadius: '7px',
-                  border: 'none',
-                  background: !isAdminTab
-                    ? '#059669'
-                    : 'transparent',
-                  color: !isAdminTab ? '#ffffff' : (isDarkMode ? '#94a3b8' : '#64748b'),
-                  fontSize: '12px',
-                  fontWeight: '700',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                  transition: 'all 0.2s ease',
-                  boxShadow: !isAdminTab ? '0 2px 8px rgba(5, 150, 105, 0.4)' : 'none'
-                }}
-              >
-                <Users size={13} />
-                <span>User Login</span>
-              </button>
-            </div>
-
-            {/* Error banner */}
-            {errorMessage && (
-              <div style={{
-                padding: '8px 12px',
-                background: 'rgba(239, 68, 68, 0.12)',
-                border: '1px solid rgba(239, 68, 68, 0.3)',
-                borderRadius: '8px',
-                color: '#ef4444',
-                fontSize: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}>
-                <AlertCircle size={14} />
-                <span>{errorMessage}</span>
-              </div>
-            )}
-
-            {/* Login Form */}
-            <form onSubmit={handleLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '11px' }}>
-              
-              {/* Email Field */}
-              <div>
-                <label style={{
-                  display: 'block',
-                  fontSize: '11.5px',
-                  fontWeight: '600',
-                  color: isDarkMode ? '#e2e8f0' : '#334155',
-                  marginBottom: '4px'
-                }}>
-                  Email address
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <Mail
-                    size={15}
-                    style={{
-                      position: 'absolute',
-                      left: '10px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      color: isDarkMode ? '#64748b' : '#94a3b8',
-                      pointerEvents: 'none'
-                    }}
-                  />
+                <div className="auth-field">
+                  <label htmlFor="login-email">Work email</label>
                   <input
+                    id="login-email"
+                    className="auth-input"
                     type="text"
+                    inputMode="email"
+                    autoComplete="username"
+                    placeholder="you@company.com"
                     required
+                    autoFocus
                     value={email}
                     onChange={e => setEmail(e.target.value)}
-                    placeholder={isAdminTab ? "admin@company.com" : "user@company.com"}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px 8px 34px',
-                      borderRadius: '8px',
-                      border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.12)' : '1px solid #cbd5e1',
-                      background: isDarkMode ? 'rgba(15, 23, 42, 0.6)' : '#ffffff',
-                      color: isDarkMode ? '#f8fafc' : '#0f172a',
-                      fontSize: '13px',
-                      outline: 'none',
-                      boxSizing: 'border-box',
-                      transition: 'border-color 0.2s ease'
-                    }}
                   />
                 </div>
-              </div>
 
-              {/* Password Field */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                  <label style={{
-                    fontSize: '11.5px',
-                    fontWeight: '600',
-                    color: isDarkMode ? '#e2e8f0' : '#334155'
-                  }}>
-                    Password
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => alert(`Credentials:\n• Admin: admin@company.com / admin\n• User: user@company.com / user`)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: '#38bdf8',
-                      fontSize: '11px',
-                      fontWeight: '600',
-                      cursor: 'pointer',
-                      padding: 0
-                    }}
-                  >
-                    Forgot password?
-                  </button>
+                <div className="auth-field">
+                  <div className="auth-field-top">
+                    <label htmlFor="login-password">Password</label>
+                    <button type="button" className="auth-link" onClick={() => goTo('forgot')}>Forgot password?</button>
+                  </div>
+                  <div className="auth-input-wrap">
+                    <input
+                      id="login-password"
+                      className="auth-input"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      placeholder="Your password"
+                      required
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      onKeyUp={e => setCapsOn(e.getModifierState('CapsLock'))}
+                      aria-describedby={capsOn ? 'caps-warning' : undefined}
+                    />
+                    {passwordToggle}
+                  </div>
+                  {capsOn && <span id="caps-warning" className="auth-caps">Caps Lock is on.</span>}
                 </div>
-                <div style={{ position: 'relative' }}>
-                  <Lock
-                    size={15}
-                    style={{
-                      position: 'absolute',
-                      left: '10px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      color: isDarkMode ? '#64748b' : '#94a3b8',
-                      pointerEvents: 'none'
-                    }}
-                  />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="Enter your password"
-                    style={{
-                      width: '100%',
-                      padding: '8px 34px 8px 34px',
-                      borderRadius: '8px',
-                      border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.12)' : '1px solid #cbd5e1',
-                      background: isDarkMode ? 'rgba(15, 23, 42, 0.6)' : '#ffffff',
-                      color: isDarkMode ? '#f8fafc' : '#0f172a',
-                      fontSize: '13px',
-                      outline: 'none',
-                      boxSizing: 'border-box',
-                      transition: 'border-color 0.2s ease'
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    style={{
-                      position: 'absolute',
-                      right: '10px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      background: 'none',
-                      border: 'none',
-                      color: isDarkMode ? '#64748b' : '#94a3b8',
-                      cursor: 'pointer',
-                      padding: 0,
-                      display: 'flex',
-                      alignItems: 'center'
-                    }}
-                  >
-                    {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
-                  </button>
-                </div>
-              </div>
 
-              {/* Remember Me & MFA Link */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: isDarkMode ? '#cbd5e1' : '#475569' }}>
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={e => setRememberMe(e.target.checked)}
-                    style={{ cursor: 'pointer', accentColor: '#2563eb', width: '14px', height: '14px' }}
-                  />
-                  <span>Remember me</span>
+                <label className="auth-check">
+                  <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />
+                  <span>Keep me signed in</span>
                 </label>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMfaActive(!mfaActive);
-                    alert(mfaActive ? 'MFA hardware token standby' : 'MFA hardware token verified: YubiKey / WebAuthn ready');
-                  }}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#38bdf8',
-                    fontSize: '11px',
-                    fontWeight: '600',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: 0
-                  }}
-                >
-                  <Shield size={12} />
-                  <span>Login with MFA</span>
+                <button type="submit" className="auth-btn primary" disabled={isLoading || !email.trim() || !password}>
+                  <span>{isLoading ? 'Signing in' : role === 'ADMIN' ? 'Sign in as administrator' : 'Sign in'}</span>
+                  <span className="auth-btn-icon" aria-hidden="true">
+                    {isLoading ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <ArrowRight size={16} />}
+                  </span>
                 </button>
-              </div>
+              </form>
+            )}
 
-              {/* Submit Button */}
-              <button
-                type="submit"
-                disabled={isLoading}
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  borderRadius: '8px',
-                  border: 'none',
-                  background: isAdminTab
-                    ? 'linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)'
-                    : 'linear-gradient(135deg, #059669 0%, #2563eb 100%)',
-                  color: '#ffffff',
-                  fontSize: '13px',
-                  fontWeight: '700',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                  boxShadow: isAdminTab
-                    ? '0 4px 14px rgba(37, 99, 235, 0.4)'
-                    : '0 4px 14px rgba(5, 150, 105, 0.4)',
-                  transition: 'all 0.2s ease',
-                  marginTop: '2px'
-                }}
-              >
-                <span>
-                  {isLoading
-                    ? 'Authenticating...'
-                    : (isAdminTab ? 'Sign In to Admin Console' : 'Sign In to User Studio')
-                  }
-                </span>
-                <ArrowRight size={14} />
-              </button>
+            {view === 'forgot' && (
+              <form className="auth-form" onSubmit={handleForgotSubmit}>
+                <div>
+                  <h2 className="auth-heading">Reset your password</h2>
+                  <p className="auth-sub">Enter the email of your account. We will send a link to choose a new password.</p>
+                </div>
+                {messages}
+                <div className="auth-field">
+                  <label htmlFor="forgot-email">Work email</label>
+                  <input id="forgot-email" className="auth-input" type="email" autoComplete="username" placeholder="you@company.com" required autoFocus
+                    value={email} onChange={e => setEmail(e.target.value)} />
+                </div>
+                <button type="submit" className="auth-btn primary" disabled={isLoading || !email.trim()}>
+                  <span>{isLoading ? 'Sending' : notice ? 'Send another link' : 'Send reset link'}</span>
+                  <span className="auth-btn-icon" aria-hidden="true"><ArrowRight size={16} /></span>
+                </button>
+                <button type="button" className="auth-link back" onClick={() => goTo('login')}>
+                  <ArrowLeft size={14} aria-hidden="true" />Back to sign in
+                </button>
+              </form>
+            )}
 
-            </form>
-
-            {/* Secure Access Badges */}
-            <div>
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                marginBottom: '8px'
-              }}>
-                <div style={{ flex: 1, height: '1px', background: isDarkMode ? 'rgba(255, 255, 255, 0.08)' : '#e2e8f0' }} />
-                <span style={{ fontSize: '10px', color: isDarkMode ? '#64748b' : '#94a3b8', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  Secure Access
-                </span>
-                <div style={{ flex: 1, height: '1px', background: isDarkMode ? 'rgba(255, 255, 255, 0.08)' : '#e2e8f0' }} />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
-                {[
-                  { icon: <Lock size={12} color="#38bdf8" />, label: 'Encrypted' },
-                  { icon: <Shield size={12} color="#34d399" />, label: 'Role-Based' },
-                  { icon: <FileText size={12} color="#a78bfa" />, label: 'Audit Trail' }
-                ].map((badge, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      padding: '6px 4px',
-                      borderRadius: '6px',
-                      background: isDarkMode ? 'rgba(15, 23, 42, 0.5)' : '#f8fafc',
-                      border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.06)' : '1px solid #e2e8f0',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      textAlign: 'center',
-                      gap: '3px'
-                    }}
-                  >
-                    {badge.icon}
-                    <span style={{ fontSize: '9.5px', color: isDarkMode ? '#94a3b8' : '#64748b', fontWeight: '500' }}>
-                      {badge.label}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Need Help Footer */}
-            <div style={{ textAlign: 'center', fontSize: '11.5px', color: isDarkMode ? '#64748b' : '#94a3b8' }}>
-              Need help?{' '}
-              <a
-                href="mailto:support@certifyai.in"
-                style={{ color: '#38bdf8', textDecoration: 'none', fontWeight: '600' }}
-              >
-                Contact support
-              </a>
-            </div>
-
+            {view === 'reset' && (
+              <form className="auth-form" onSubmit={handleResetSubmit}>
+                <div>
+                  <h2 className="auth-heading">Choose a new password</h2>
+                  <p className="auth-sub">
+                    {resetEmail ? <>For <strong>{resetEmail}</strong>.</> : tokenChecked ? 'This link cannot be used.' : 'Checking your reset link.'}
+                  </p>
+                </div>
+                {messages}
+                {resetEmail && (
+                  <>
+                    <div className="auth-field">
+                      <label htmlFor="new-password">New password</label>
+                      <div className="auth-input-wrap">
+                        <input id="new-password" className="auth-input" type={showPassword ? 'text' : 'password'} autoComplete="new-password" required autoFocus
+                          minLength={MIN_PASSWORD_LENGTH} placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+                          value={newPassword} onChange={e => setNewPassword(e.target.value)} />
+                        {passwordToggle}
+                      </div>
+                    </div>
+                    <div className="auth-field">
+                      <label htmlFor="confirm-password">Confirm new password</label>
+                      <input id="confirm-password" className="auth-input" type={showPassword ? 'text' : 'password'} autoComplete="new-password" required
+                        value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} />
+                    </div>
+                    <button type="submit" className="auth-btn primary" disabled={isLoading || newPassword.length < MIN_PASSWORD_LENGTH || !confirmPassword}>
+                      <span>{isLoading ? 'Saving' : 'Save new password'}</span>
+                      <span className="auth-btn-icon" aria-hidden="true"><ArrowRight size={16} /></span>
+                    </button>
+                  </>
+                )}
+                {tokenChecked && !resetEmail && (
+                  <button type="button" className="auth-btn primary" onClick={() => goTo('forgot')}>
+                    <span>Request a new link</span>
+                    <span className="auth-btn-icon" aria-hidden="true"><ArrowRight size={16} /></span>
+                  </button>
+                )}
+                <button type="button" className="auth-link back" onClick={() => goTo('login')}>
+                  <ArrowLeft size={14} aria-hidden="true" />Back to sign in
+                </button>
+              </form>
+            )}
           </div>
 
-        </section>
-
-      </main>
-
-      {/* ── BOTTOM GLOBAL FOOTER ───────────────────────────────────── */}
-      <footer style={{
-        height: '38px',
-        padding: '0 32px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        fontSize: '11.5px',
-        color: isDarkMode ? 'rgba(255, 255, 255, 0.55)' : '#64748b',
-        borderTop: isDarkMode ? '1px solid rgba(255, 255, 255, 0.08)' : '1px solid #e2e8f0',
-        background: isDarkMode ? '#060a14' : '#ffffff',
-        zIndex: 20,
-        flexShrink: 0
-      }}>
-        <div>
-          © 2026 CertifyAI. All rights reserved.
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <span style={{ cursor: 'pointer' }}>Privacy</span>
-          <span style={{ cursor: 'pointer' }}>Terms</span>
-          <span style={{ cursor: 'pointer' }}>Security</span>
-          <span style={{ cursor: 'pointer' }}>Support</span>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px #22c55e' }} />
-            <span style={{ color: isDarkMode ? '#e2e8f0' : '#1e293b', fontWeight: '500' }}>All Systems Operational</span>
-          </div>
-          <span style={{ color: isDarkMode ? 'rgba(255, 255, 255, 0.4)' : '#94a3b8' }}>V10.3.0</span>
-        </div>
-      </footer>
-
+          <nav className="auth-legal" aria-label="Legal">
+            <a href="/privacy">Privacy Policy</a>
+            <a href="/terms">Terms and Conditions</a>
+          </nav>
+        </main>
+      </div>
     </div>
   );
 };

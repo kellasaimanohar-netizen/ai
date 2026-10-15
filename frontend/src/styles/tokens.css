@@ -1,0 +1,307 @@
+/*
+ * Design tokens
+ *
+ * Three layers:
+ *   1. Scales: spacing, type, radius, motion, z-index. Theme independent.
+ *   2. Semantic colors: what a color is for (surface, text, border, accent, status).
+ *      Light is the default; dark redefines the same names under [data-theme="dark"].
+ *   3. Legacy aliases: names used by inline styles in older pages. They point at the
+ *      semantic tokens so those pages follow the theme. New code uses layer 2 names.
+ *
+ * Contrast (WCAG 2.1): body and muted text are at least 4.5:1 on every surface they sit on,
+ * form control borders at least 3:1, white on the accent at least 4.5:1, in both themes.
+ */
+
+:root {
+  /* ---------- Type ---------- */
+  --font-sans: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --text-xs: 12px;   /* captions, table meta, badges */
+  --text-sm: 14px;   /* body, controls, table cells */
+  --text-md: 16px;   /* panel titles, emphasized body */
+  --text-lg: 20px;   /* section titles */
+  --text-xl: 24px;   /* page titles */
+  --text-2xl: 32px;  /* KPI values, sign-in headline */
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ---------- Spacing (8px scale, with 4px and 12px for tight spots) ---------- */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ---------- Radius ---------- */
+  --radius-sm: 6px;   /* controls, badges, menu items */
+  --radius-md: 8px;   /* cards, panels, inputs in groups */
+  --radius-lg: 12px;  /* modals, drawers, sign-in card */
+  --radius-round: 50%; /* avatars and status dots only, never buttons */
+
+  /* ---------- Motion ---------- */
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 250ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);   /* things arriving: menus, pages, toasts */
+  --duration-enter: 280ms;
+
+  /* ---------- Layers ---------- */
+  --z-base: 0;
+  --z-sticky: 10;     /* sticky table headers, sticky form bars */
+  --z-header: 30;     /* app top bar */
+  --z-sidebar: 40;    /* app sidebar, also above the top bar on mobile */
+  --z-dropdown: 50;   /* menus, popovers */
+  --z-overlay: 60;    /* scrims */
+  --z-modal: 70;      /* modals, drawers, command palette */
+  --z-toast: 80;
+  --z-tooltip: 90;
+
+  /* ---------- Layout ---------- */
+  --sidebar-width: 248px;
+  --sidebar-width-collapsed: 64px;
+  --topbar-height: 68px;
+  --content-max: 1440px;
+  --control-height-sm: 28px;
+  --control-height-md: 36px;
+  --control-height-lg: 44px;
+
+  /* ---------- Color: light ---------- */
+  color-scheme: light;
+
+  --color-bg: #f8fafc;              /* Crisp modern canvas */
+  --color-surface: #ffffff;         /* Elevated cards and surfaces */
+  --color-surface-subtle: #f1f5f9;  /* Headers, wells, insets */
+  --color-surface-hover: #e2e8f0;   /* Interactive hover state */
+  --color-surface-pressed: #cbd5e1;
+  --color-surface-inverse: #0f172a; /* Tooltips, dark popovers */
+  --color-overlay: rgba(15, 23, 42, 0.65);
+
+  --color-border: #e2e8f0;          /* High contrast card borders */
+  --color-border-strong: #cbd5e1;   /* Emphasized boundaries */
+  --color-border-input: #94a3b8;    /* Form controls, sharp 4.5:1 visibility */
+
+  --color-text: #0f172a;            /* High-contrast deep slate (WCAG AAA) */
+  --color-text-secondary: #334155;  /* Legible subheaders, body text */
+  --color-text-muted: #64748b;      /* Crisp secondary captions */
+  --color-text-disabled: #94a3b8;
+  --color-text-inverse: #ffffff;
+
+  /* Brand: the CertifyAI green used on the sign-in page */
+  --color-accent: #0b7a4b;
+  --color-accent-hover: #09663e;
+  --color-accent-pressed: #075232;
+  --color-accent-soft: #e9f5ef;
+  --color-accent-soft-border: #b4dcc6;
+  --color-on-accent: #ffffff;
+  --color-focus: #0b7a4b;
+
+  /* Admin console: a steel blue so admins always know which side they are on. Solid colors only. */
+  --color-admin-primary: #2f5fb3;
+  --color-admin-glow: transparent;
+  --color-admin-gradient: var(--color-admin-primary);
+  --color-admin-subtle: #edf2fb;
+  --color-admin-border: #c5d4ee;
+
+  /* User workspace: the brand green */
+  --color-user-primary: var(--color-accent);
+  --color-user-glow: transparent;
+  --color-user-gradient: var(--color-accent);
+  --color-user-subtle: var(--color-accent-soft);
+  --color-user-border: var(--color-accent-soft-border);
+
+  /* Rich Status Tokens */
+  --color-success: #059669;         /* Vibrant Emerald */
+  --color-success-hover: #047857;
+  --color-success-soft: #ecfdf5;
+  --color-success-border: #a7f3d0;
+  --color-warning: #d97706;         /* Golden Amber */
+  --color-warning-hover: #b45309;
+  --color-warning-soft: #fffbeb;
+  --color-warning-border: #fde68a;
+  --color-danger: #e11d48;          /* Vivid Rose / Crimson */
+  --color-danger-hover: #be123c;
+  --color-danger-soft: #fff1f2;
+  --color-danger-border: #fecdd3;
+  --color-info: #0284c7;            /* Ocean Cyan */
+  --color-info-soft: #f0f9ff;
+  --color-info-border: #bae6fd;
+  --color-purple: #7c3aed;
+  --color-purple-soft: #f5f3ff;
+  --color-purple-border: #ddd6fe;
+
+  /* Chart series */
+  --chart-1: #4f46e5;
+  --chart-2: #0284c7;
+  --chart-3: #10b981;
+  --chart-4: #f59e0b;
+  --chart-5: #e11d48;
+  --chart-grid: #e2e8f0;
+  --chart-axis: #64748b;
+
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-sm: 0 2px 4px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 6px 16px -2px rgba(15, 23, 42, 0.08), 0 2px 6px -1px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 18px 36px -6px rgba(15, 23, 42, 0.12), 0 6px 12px -3px rgba(15, 23, 42, 0.06);
+  --shadow-glow: none;
+  --shadow-glow-admin: none;
+  --shadow-glow-user: none;
+  --ring-focus: 0 0 0 3px rgba(11, 122, 75, 0.22);
+  --ring-danger: 0 0 0 3px rgba(225, 29, 72, 0.22);
+}
+
+/* ---------- Color: dark ---------- */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-bg: #070a12;              /* Deep Cyber Obsidian */
+  --color-surface: #0f172a;         /* Deep Navy Slate Surface */
+  --color-surface-subtle: #131d35;  /* Subtle wells and table heads */
+  --color-surface-hover: #1e293b;   /* Clean hover highlight */
+  --color-surface-pressed: #2a3852;
+  --color-surface-inverse: #f8fafc;
+  --color-overlay: rgba(0, 0, 0, 0.75);
+
+  --color-border: #1e293b;          /* Crisp dark borders */
+  --color-border-strong: #334155;
+  --color-border-input: #475569;
+
+  --color-text: #f8fafc;            /* High contrast pure white */
+  --color-text-secondary: #cbd5e1;  /* High readability slate */
+  --color-text-muted: #94a3b8;      /* Distinct muted text */
+  --color-text-disabled: #475569;
+  --color-text-inverse: #070a12;
+
+  /* Brand green, lifted for dark backgrounds; dark text on it keeps 4.5:1 contrast */
+  --color-accent: #3dbb84;
+  --color-accent-hover: #5ccb98;
+  --color-accent-pressed: #2c9e6c;
+  --color-accent-soft: rgba(61, 187, 132, 0.14);
+  --color-accent-soft-border: rgba(61, 187, 132, 0.38);
+  --color-on-accent: #04170e;
+  --color-focus: #5ccb98;
+
+  --color-admin-primary: #7fa6ec;
+  --color-admin-glow: transparent;
+  --color-admin-gradient: var(--color-admin-primary);
+  --color-admin-subtle: rgba(127, 166, 236, 0.13);
+  --color-admin-border: rgba(127, 166, 236, 0.35);
+
+  --color-user-primary: var(--color-accent);
+  --color-user-glow: transparent;
+  --color-user-gradient: var(--color-accent);
+  --color-user-subtle: var(--color-accent-soft);
+  --color-user-border: var(--color-accent-soft-border);
+
+  --color-success: #10b981;
+  --color-success-hover: #34d399;
+  --color-success-soft: rgba(16, 185, 129, 0.15);
+  --color-success-border: rgba(16, 185, 129, 0.4);
+  --color-warning: #fbbf24;
+  --color-warning-hover: #fcd34d;
+  --color-warning-soft: rgba(251, 191, 36, 0.15);
+  --color-warning-border: rgba(251, 191, 36, 0.4);
+  --color-danger: #f43f5e;
+  --color-danger-hover: #fb7185;
+  --color-danger-soft: rgba(244, 63, 94, 0.16);
+  --color-danger-border: rgba(244, 63, 94, 0.42);
+  --color-info: #38bdf8;
+  --color-info-soft: rgba(56, 189, 248, 0.15);
+  --color-info-border: rgba(56, 189, 248, 0.4);
+  --color-purple: #c084fc;
+  --color-purple-soft: rgba(192, 132, 252, 0.15);
+  --color-purple-border: rgba(192, 132, 252, 0.4);
+
+  --chart-1: #6366f1;
+  --chart-2: #38bdf8;
+  --chart-3: #10b981;
+  --chart-4: #fbbf24;
+  --chart-5: #f43f5e;
+  --chart-grid: #1e293b;
+  --chart-axis: #94a3b8;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 2px 5px rgba(0, 0, 0, 0.6);
+  --shadow-md: 0 8px 20px -4px rgba(0, 0, 0, 0.7);
+  --shadow-lg: 0 22px 48px -10px rgba(0, 0, 0, 0.85);
+  --shadow-glow: none;
+  --shadow-glow-admin: none;
+  --shadow-glow-user: none;
+  --ring-focus: 0 0 0 3px rgba(92, 203, 152, 0.35);
+  --ring-danger: 0 0 0 3px rgba(244, 63, 94, 0.35);
+}
+
+/* ---------- Legacy aliases (older pages reference these inline) ---------- */
+:root {
+  --bg-deep: var(--color-bg);
+  --bg-panel: var(--color-surface);
+  --bg-panel-hover: var(--color-surface-hover);
+  --bg-subtle: var(--color-surface-subtle);
+  --bg-sidebar: var(--color-surface);
+  --header-bg: var(--color-surface);
+  --bg-terminal: #0f1520;
+
+  --border-subtle: var(--color-border);
+  --border-strong: var(--color-border-strong);
+  --border-focus: var(--color-focus);
+  --border-glow: var(--color-accent-soft-border);
+
+  --text-primary: var(--color-text);
+  --text-secondary: var(--color-text-secondary);
+  --text-muted: var(--color-text-muted);
+
+  --accent-primary: var(--color-accent);
+  --accent-primary-hover: var(--color-accent-hover);
+  --accent-primary-glow: var(--color-accent-soft);
+  --accent-soft: var(--color-accent-soft);
+  --accent-cyan: var(--color-accent);
+  --accent-cyan-hover: var(--color-accent-hover);
+  --accent-cyan-glow: var(--color-accent-soft);
+  --accent-purple: var(--color-accent);
+  --accent-purple-hover: var(--color-accent-hover);
+  --accent-purple-glow: var(--color-accent-soft);
+  --accent-emerald: var(--color-success);
+  --accent-emerald-glow: var(--color-success-soft);
+
+  --color-pass: var(--color-success);
+  --color-pass-bg: var(--color-success-soft);
+  --color-pass-border: var(--color-success-border);
+  --color-warning-bg: var(--color-warning-soft);
+  --color-critical: var(--color-danger);
+  --color-critical-bg: var(--color-danger-soft);
+  --color-critical-border: var(--color-danger-border);
+  --color-info-bg: var(--color-info-soft);
+
+  --series-blue: var(--chart-1);
+  --series-teal: #0f766e;
+  --series-gold: #a16207;
+  --series-rose: #be185d;
+  --series-slate: #4a5464;
+
+  --shadow-glow: none;
+  --radius-xs: 4px;
+  --transition-fast: var(--duration-fast) var(--ease-standard);
+  --transition-normal: var(--duration-base) var(--ease-standard);
+  --transition-slow: var(--duration-slow) var(--ease-standard);
+}
+
+:root[data-theme='dark'] {
+  --bg-terminal: #070a10;
+  --series-teal: #2dd4bf;
+  --series-gold: #facc15;
+  --series-rose: #f472b6;
+  --series-slate: #98a2b3;
+}

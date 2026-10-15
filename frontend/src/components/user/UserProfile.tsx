@@ -1,21 +1,8 @@
-import React, { useState } from 'react';
-import {
-  User,
-  Shield,
-  Mail,
-  Building,
-  Calendar,
-  CheckCircle2,
-  Clock,
-  Edit3,
-  Lightbulb,
-  Info,
-  Check,
-  Award,
-  Sparkles,
-  Lock,
-  Key
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Building2, CalendarDays, Clock, Download, History, Layers, Mail, Pencil, Play, User } from 'lucide-react';
+import { apiFetch } from '../../utils/apiClient';
+import { replaceToken, updateStoredUser } from '../../utils/session';
+import { Alert, Avatar, Badge, Button, Field, Panel } from '../ui';
 
 interface UserProfileProps {
   user: {
@@ -27,427 +14,175 @@ interface UserProfileProps {
     avatar_url?: string;
     created_at?: string;
     last_login?: string;
+    status?: string;
   };
 }
 
+const CAPABILITIES: { icon: React.ElementType; title: string; text: string }[] = [
+  { icon: Play, title: 'Run audits', text: 'Test agents with the testing studio.' },
+  { icon: History, title: 'Track results', text: 'View your own scores, findings and test history.' },
+  { icon: Download, title: 'Export reports', text: 'Download audit reports as PDF or Markdown and view certificates.' },
+  { icon: Layers, title: 'Compare versions', text: 'See the agents you have tested and how each has changed.' },
+];
+
+const formatDate = (iso?: string) => {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
 export const UserProfile: React.FC<UserProfileProps> = ({ user }) => {
+  const [profile, setProfile] = useState({ name: user?.name || '', department: user?.department || '' });
   const [isEditing, setIsEditing] = useState(false);
+  const [name, setName] = useState(profile.name);
+  const [department, setDepartment] = useState(profile.department);
+  const [password, setPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  // The stored login copy can be older than the account record, so read the dates fresh.
+  const [dates, setDates] = useState({ created_at: user?.created_at, last_login: user?.last_login });
+
+  useEffect(() => {
+    let live = true;
+    apiFetch('/api/auth/me')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (live && d?.user) setDates({ created_at: d.user.created_at, last_login: d.user.last_login });
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
+
+  const passwordError = password && password.length < 8 ? 'Use at least 8 characters.' : null;
+  const currentMissing = !!password && !currentPassword;
+  const dirty = name !== profile.name || department !== profile.department || password !== '';
+
+  const startEdit = () => {
+    setName(profile.name);
+    setDepartment(profile.department);
+    setPassword('');
+    setCurrentPassword('');
+    setMessage(null);
+    setIsEditing(true);
+  };
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordError || currentMissing) return;
+    setIsSaving(true);
+    setMessage(null);
+    try {
+      const payload: Record<string, string> = { name, department };
+      if (password) {
+        payload.password = password;
+        payload.current_password = currentPassword;
+      }
+      const res = await apiFetch('/api/user/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'The profile could not be updated.' }));
+        throw new Error(err.detail || 'The profile could not be updated.');
+      }
+      const data = await res.json();
+      const updated = data.user || {};
+      updateStoredUser(updated);
+      if (data.token) replaceToken(data.token);   // a password change signs out other devices, not this one
+      setProfile({ name: updated.name || name, department: updated.department || department });
+      setIsEditing(false);
+      const passwordChanged = !!password;
+      setPassword('');
+      setCurrentPassword('');
+      setMessage({ text: passwordChanged ? 'Profile updated. Your other devices have been signed out.' : 'Profile updated.', type: 'success' });
+    } catch (err) {
+      setMessage({ text: err instanceof Error ? err.message : 'The profile could not be updated.', type: 'error' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const isAdmin = user?.role === 'ADMIN';
+  const rows: [React.ElementType, string, React.ReactNode][] = [
+    [User, 'Full name', profile.name || '-'],
+    [Mail, 'Email', user?.email || '-'],
+    [Building2, 'Department', profile.department || '-'],
+    [CalendarDays, 'Member since', formatDate(dates.created_at)],
+    [Clock, 'Last sign in', formatDate(dates.last_login)],
+  ];
 
   return (
-    <div className="animate-slideup" style={{
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '14px',
-      boxSizing: 'border-box'
-    }}>
-      
-      {/* 1. Hero Profile Banner Card (Lilac / Soft Lavender Mountain Sky Gradient) */}
-      <div style={{
-        background: 'linear-gradient(135deg, #ede9fe 0%, #f3e8ff 40%, #fdf2f8 75%, #f0fdf4 100%)',
-        borderRadius: '16px',
-        padding: '16px 28px',
-        border: '1px solid rgba(216, 180, 254, 0.6)',
-        boxShadow: '0 4px 16px rgba(139, 92, 246, 0.04)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '16px',
-        position: 'relative',
-        overflow: 'hidden'
-      }}>
-        {/* Soft Background Wave Glow */}
-        <div style={{
-          position: 'absolute', right: '-20px', bottom: '-20px', width: '280px', height: '140px',
-          background: 'radial-gradient(ellipse at center, rgba(168, 85, 247, 0.18), transparent 70%)',
-          pointerEvents: 'none'
-        }} />
-
-        {/* Left Side: Avatar & Details */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '20px', zIndex: 1 }}>
-          <div style={{
-            width: '72px',
-            height: '72px',
-            borderRadius: '50%',
-            background: 'linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '30px',
-            fontWeight: '800',
-            color: '#ffffff',
-            boxShadow: '0 6px 20px rgba(139, 92, 246, 0.35)',
-            border: '3px solid #ffffff'
-          }}>
-            {user?.name ? user.name[0].toUpperCase() : 'M'}
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={{ fontSize: '10.5px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#64748b' }}>
-              USER ACCOUNT
-            </span>
-            
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <h1 style={{ fontSize: '24px', fontWeight: '800', color: '#0f172a', margin: 0, letterSpacing: '-0.02em' }}>
-                {user?.name || 'Ismeet'}
-              </h1>
-              <span style={{
-                background: '#ede9fe',
-                color: '#7c3aed',
-                padding: '2px 10px',
-                borderRadius: '16px',
-                fontSize: '11px',
-                fontWeight: '800',
-                letterSpacing: '0.03em',
-                border: '1px solid #ddd6fe'
-              }}>
-                USER ROLE
-              </span>
-            </div>
-
-            <p style={{ margin: 0, fontSize: '13.5px', fontWeight: '600', color: '#334155' }}>
-              AI Quality Assurance Specialist
-            </p>
-            <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>
-              Testing today for safer AI tomorrow.
-            </p>
-
-            {/* Badges Row */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '4px', flexWrap: 'wrap' }}>
-              <div style={{
-                display: 'inline-flex', alignItems: 'center', gap: '5px',
-                background: '#10b981', color: '#ffffff', padding: '2px 9px',
-                borderRadius: '14px', fontSize: '11px', fontWeight: '700'
-              }}>
-                <Check size={11} strokeWidth={3} />
-                <span>Active & Verified</span>
-              </div>
-
-              <div style={{
-                display: 'inline-flex', alignItems: 'center', gap: '5px',
-                color: '#475569', fontSize: '12px', fontWeight: '500'
-              }}>
-                <Calendar size={12} style={{ color: '#7c3aed' }} />
-                <span>Member since 12 Mar 2024</span>
-              </div>
-            </div>
+    <div className="page-stack animate-slideup">
+      <section className="profile-hero">
+        <Avatar name={profile.name} size="xl" />
+        <div className="profile-hero-text">
+          <h1>{profile.name || 'Profile'}</h1>
+          <p>{user?.email}</p>
+          <div className="profile-hero-badges">
+            <Badge tone="info">{isAdmin ? 'Admin' : 'User'}</Badge>
+            {user?.status && <Badge tone={user.status === 'Active' ? 'pass' : 'neutral'} dot>{user.status}</Badge>}
           </div>
         </div>
+        {!isEditing && (
+          <div className="profile-hero-actions">
+            <Button variant="primary" onClick={startEdit}><Pencil size={14} aria-hidden="true" />Edit profile</Button>
+          </div>
+        )}
+      </section>
 
-        {/* Right Side: Inspirational Quote with Purple Accent Bar */}
-        <div style={{ textAlign: 'right', zIndex: 1, maxWidth: '260px' }}>
-          <p style={{
-            margin: 0,
-            fontSize: '16px',
-            fontStyle: 'italic',
-            fontWeight: '700',
-            color: '#4c1d95',
-            lineHeight: 1.35,
-            letterSpacing: '-0.01em'
-          }}>
-            “For a brighter future.”
-          </p>
-          <div style={{
-            width: '40px',
-            height: '3px',
-            background: 'linear-gradient(90deg, #8b5cf6, #ec4899)',
-            borderRadius: '2px',
-            marginLeft: 'auto',
-            marginTop: '6px'
-          }} />
-        </div>
+      {message && <Alert tone={message.type === 'success' ? 'pass' : 'critical'} title={message.text} />}
+
+      <div className="profile-grid">
+        <Panel title={isEditing ? 'Edit profile' : 'Account details'} subtitle={isEditing ? 'Changes apply the next time you sign in on other devices.' : 'Administrators manage roles and access.'}>
+          {isEditing ? (
+            <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <Field label="Name" required>
+                <input className="form-input" value={name} onChange={e => setName(e.target.value)} autoComplete="name" data-autofocus />
+              </Field>
+              <Field label="Department" required>
+                <input className="form-input" value={department} onChange={e => setDepartment(e.target.value)} autoComplete="organization-title" />
+              </Field>
+              <Field label="New password" hint="Leave blank to keep your current password. At least 8 characters." error={passwordError}>
+                <input className="form-input" type="password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} />
+              </Field>
+              {password && (
+                <Field label="Current password" required hint="Needed to change your password. Your other devices will be signed out.">
+                  <input className="form-input" type="password" autoComplete="current-password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} />
+                </Field>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingTop: 16, borderTop: '1px solid var(--color-border)' }}>
+                <Button onClick={() => setIsEditing(false)} disabled={isSaving}>Cancel</Button>
+                <Button type="submit" variant="primary" loading={isSaving} disabled={!dirty || !!passwordError || currentMissing}>Save changes</Button>
+              </div>
+            </form>
+          ) : (
+            <dl className="detail-list">
+              {rows.map(([Icon, label, value]) => (
+                <div className="detail-row" key={label}>
+                  <dt><Icon size={16} aria-hidden="true" />{label}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </Panel>
+
+        <Panel title="What you can do" subtitle="Permissions granted to your role." footer={isAdmin ? undefined : 'User management and system settings are reserved for administrators.'}>
+          <ul className="profile-caps">
+            {CAPABILITIES.map(({ icon: Icon, title, text }) => (
+              <li key={title}>
+                <span className="profile-cap-icon"><Icon size={18} aria-hidden="true" /></span>
+                <div>
+                  <div className="profile-cap-title">{title}</div>
+                  <div className="profile-cap-text">{text}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Panel>
       </div>
-
-      {/* 2. Main 2-Column Balanced Information Layout */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
-        gap: '14px',
-        width: '100%',
-        flex: 1
-      }}>
-        
-        {/* Card 1: Account Information */}
-        <div style={{
-          background: '#ffffff',
-          borderRadius: '14px',
-          border: '1px solid #e2e8f0',
-          padding: '18px 22px',
-          boxShadow: '0 2px 10px rgba(0, 0, 0, 0.02)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '14px'
-        }}>
-          {/* Card Header with Edit Button */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '10px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{
-                width: '32px', height: '32px', borderRadius: '8px',
-                background: '#f5f3ff', color: '#8b5cf6',
-                display: 'flex', alignItems: 'center', justifyContent: 'center'
-              }}>
-                <User size={16} />
-              </div>
-              <div>
-                <h3 style={{ fontSize: '14.5px', fontWeight: '800', color: '#0f172a', margin: 0 }}>
-                  Account Information
-                </h3>
-                <span style={{ fontSize: '11.5px', color: '#64748b' }}>
-                  Your registered details and organization information
-                </span>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setIsEditing(!isEditing)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: '5px',
-                padding: '5px 12px', borderRadius: '7px',
-                background: '#f5f3ff', border: '1px solid #ddd6fe',
-                color: '#7c3aed', fontSize: '11.5px', fontWeight: '700',
-                cursor: 'pointer', transition: 'all 0.15s ease'
-              }}
-            >
-              <Edit3 size={12} />
-              <span>{isEditing ? 'Cancel' : 'Edit Profile'}</span>
-            </button>
-          </div>
-
-          {/* Details Table Rows */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '11px', fontSize: '12.5px', flex: 1 }}>
-            
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#475569' }}>
-                <User size={14} style={{ color: '#8b5cf6' }} />
-                <span>Full Legal Name</span>
-              </div>
-              <span style={{ fontWeight: '700', color: '#0f172a' }}>{user?.name || 'Ismeet'}</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#475569' }}>
-                <Mail size={14} style={{ color: '#8b5cf6' }} />
-                <span>Email Address</span>
-              </div>
-              <span style={{ fontWeight: '700', color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>
-                {user?.email || 'ismeet@certifyai.in'}
-              </span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#475569' }}>
-                <Award size={14} style={{ color: '#8b5cf6' }} />
-                <span>Assigned Role</span>
-              </div>
-              <span style={{
-                background: '#ede9fe', color: '#7c3aed', padding: '1px 8px',
-                borderRadius: '10px', fontSize: '10.5px', fontWeight: '800'
-              }}>
-                USER
-              </span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#475569' }}>
-                <Building size={14} style={{ color: '#8b5cf6' }} />
-                <span>Department</span>
-              </div>
-              <span style={{ fontWeight: '700', color: '#0f172a' }}>
-                {user?.department || 'AI Quality Assurance & Testing'}
-              </span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#475569' }}>
-                <Calendar size={14} style={{ color: '#8b5cf6' }} />
-                <span>Member Since</span>
-              </div>
-              <span style={{ fontWeight: '600', color: '#334155' }}>12 Mar 2024</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#475569' }}>
-                <Shield size={14} style={{ color: '#8b5cf6' }} />
-                <span>Account Status</span>
-              </div>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#16a34a', fontWeight: '700' }}>
-                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#16a34a' }}></span>
-                Active & Verified
-              </span>
-            </div>
-
-          </div>
-
-          {/* Identity Security Box */}
-          <div style={{
-            padding: '10px 14px',
-            borderRadius: '10px',
-            background: '#f8fafc',
-            border: '1px solid #e2e8f0',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            marginTop: 'auto'
-          }}>
-            <div style={{
-              width: '18px', height: '18px', borderRadius: '50%', background: '#8b5cf6', color: '#fff',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
-            }}>
-              <Lock size={10} />
-            </div>
-            <div style={{ fontSize: '11.5px', color: '#64748b', lineHeight: 1.35 }}>
-              <strong style={{ color: '#334155' }}>Authenticated Session:</strong> 256-bit SHA token issued by CertifyAI Authority.
-            </div>
-          </div>
-        </div>
-
-        {/* Card 2: Permissions & Capabilities */}
-        <div style={{
-          background: '#ffffff',
-          borderRadius: '14px',
-          border: '1px solid #e2e8f0',
-          padding: '18px 22px',
-          boxShadow: '0 2px 10px rgba(0, 0, 0, 0.02)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '14px'
-        }}>
-          {/* Card Header */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid #f1f5f9', paddingBottom: '10px' }}>
-            <div style={{
-              width: '32px', height: '32px', borderRadius: '8px',
-              background: '#ecfdf5', color: '#059669',
-              display: 'flex', alignItems: 'center', justifyContent: 'center'
-            }}>
-              <Shield size={16} />
-            </div>
-            <div>
-              <h3 style={{ fontSize: '14.5px', fontWeight: '800', color: '#0f172a', margin: 0 }}>
-                Permissions & Capabilities
-              </h3>
-              <span style={{ fontSize: '11.5px', color: '#64748b' }}>
-                Authorizations granted under USER role
-              </span>
-            </div>
-          </div>
-
-          {/* Capabilities List with Green Checkmarks */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1 }}>
-            
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: '#334155' }}>
-              <div style={{ width: '18px', height: '18px', borderRadius: '50%', background: '#10b981', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Check size={11} strokeWidth={3} />
-              </div>
-              <span>Test AI agents using the testing studio</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: '#334155' }}>
-              <div style={{ width: '18px', height: '18px', borderRadius: '50%', background: '#10b981', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Check size={11} strokeWidth={3} />
-              </div>
-              <span>View your test scores and detailed results</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: '#334155' }}>
-              <div style={{ width: '18px', height: '18px', borderRadius: '50%', background: '#10b981', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Check size={11} strokeWidth={3} />
-              </div>
-              <span>Access your previous tests and test history</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: '#334155' }}>
-              <div style={{ width: '18px', height: '18px', borderRadius: '50%', background: '#10b981', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Check size={11} strokeWidth={3} />
-              </div>
-              <span>Download audit reports (PDF, JSON, Certificate)</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: '#334155' }}>
-              <div style={{ width: '18px', height: '18px', borderRadius: '50%', background: '#10b981', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Check size={11} strokeWidth={3} />
-              </div>
-              <span>View available agents and their information</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: '#334155' }}>
-              <div style={{ width: '18px', height: '18px', borderRadius: '50%', background: '#10b981', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Check size={11} strokeWidth={3} />
-              </div>
-              <span>Use compliance insights and remediation suggestions</span>
-            </div>
-
-          </div>
-
-          {/* Role Boundary Box (Soft Violet / Lavender) */}
-          <div style={{
-            padding: '10px 14px',
-            borderRadius: '10px',
-            background: '#f5f3ff',
-            border: '1px solid #ede9fe',
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '10px',
-            marginTop: 'auto'
-          }}>
-            <div style={{
-              width: '18px', height: '18px', borderRadius: '50%', background: '#7c3aed', color: '#fff',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '10.5px', fontWeight: '800'
-            }}>
-              i
-            </div>
-            <div style={{ fontSize: '11.5px', color: '#475569', lineHeight: 1.35 }}>
-              <strong style={{ color: '#6d28d9', display: 'block', marginBottom: '1px' }}>Role Boundary</strong>
-              Administrative features, user management and system settings are reserved for Syed (ADMIN).
-            </div>
-          </div>
-
-        </div>
-
-      </div>
-
-      {/* 3. Bottom Motivational Banner */}
-      <div style={{
-        background: '#ffffff',
-        borderRadius: '14px',
-        border: '1px solid #e2e8f0',
-        padding: '12px 24px',
-        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.02)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '12px'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{
-            width: '32px', height: '32px', borderRadius: '8px',
-            background: '#f5f3ff', color: '#8b5cf6',
-            display: 'flex', alignItems: 'center', justifyContent: 'center'
-          }}>
-            <Lightbulb size={16} />
-          </div>
-          <div>
-            <h4 style={{ fontSize: '13px', fontWeight: '800', color: '#0f172a', margin: 0 }}>
-              Keep Testing. Keep Improving.
-            </h4>
-            <p style={{ margin: 0, fontSize: '11.5px', color: '#64748b' }}>
-              Your work helps build reliable and trustworthy AI systems.
-            </p>
-          </div>
-        </div>
-
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: '13px', fontWeight: '800', color: '#0f172a' }}>
-            Certify<span style={{ color: '#7c3aed' }}>AI</span>
-          </div>
-          <div style={{ fontSize: '10px', color: '#94a3b8' }}>
-            The Trust Layer for Autonomous AI
-          </div>
-        </div>
-      </div>
-
     </div>
   );
 };

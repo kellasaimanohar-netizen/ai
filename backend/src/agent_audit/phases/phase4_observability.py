@@ -31,7 +31,7 @@ async def run_phase(ctx: PhaseContext) -> list[Finding]:
 
     for i in range(samples):
         resp, latency_ms = await ctx.call_agent({
-            "input": f"ping {i}", "_mock_scenario": "normal",
+            "input": f"ping {i}", "_mock_scenario": "trace_probe",
         })
         latencies.append(latency_ms)
         cost = resp.get("cost_usd")

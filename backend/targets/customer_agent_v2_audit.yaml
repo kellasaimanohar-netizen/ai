@@ -11,7 +11,12 @@ sources:
     path: "C:/Personal/Customer_Agent 2/Backend/openapi.json"
   - type: yaml_inline
     runbooks_dir: "C:/Personal/Customer_Agent 2/runbooks"
-    golden_dataset: "C:/Personal/Customer_Agent 2/golden.jsonl"
+    # Vendored into this repo (targets/fixtures/) so FAIR-EQUITY-001 and
+    # GND-GOLDEN-001 are reachable from CI / a fresh clone, instead of only
+    # working on the one machine that has "C:/Personal/Customer_Agent 2".
+    # Source of truth: C:/Personal/Customer_Agent 2/golden.jsonl — re-copy
+    # here if that file grows beyond its current 2-case placeholder.
+    golden_dataset: "targets/fixtures/customer_agent_v2_golden.jsonl"
     runtime:
       endpoint: "http://localhost:8005/chat"
       protocol: http
@@ -36,6 +41,11 @@ sources:
       data_classification: ["CONFIDENTIAL", "DPDP_PERSONAL"]
       voice_consent: true
       recording_consent: true
+    capability_profile:
+      archetypes: ["rag", "customer_service"]
+      uses_rag: true
+      data_mode: "static"      # answers over the static golden/RAG corpus, not a live source
+      sensitive_data_handling: true
     slos:
       p95_latency_ms: 10000
       max_cost_per_task_usd: 0.1

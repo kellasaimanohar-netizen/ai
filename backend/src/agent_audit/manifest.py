@@ -58,6 +58,19 @@ class Fact:
 
 
 # ─── Sub-structures ──────────────────────────────────────────────────────
+_SECRET_WORDS = ("secret", "password", "passwd", "token", "apikey", "api_key", "private_key", "credential")
+
+
+def _without_literal_secrets(config: dict[str, Any]) -> dict[str, Any]:
+    """Provider settings safe to store: env var names (keys ending in _env) and non-secret values."""
+    out: dict[str, Any] = {}
+    for k, v in (config or {}).items():
+        key = str(k).lower()
+        if key.endswith("_env") or not any(w in key for w in _SECRET_WORDS):
+            out[k] = v
+    return out
+
+
 @dataclass(slots=True)
 class AuthSpec:
     """How to authenticate to the agent."""
@@ -194,6 +207,12 @@ class TargetManifest:
     # Frameworks to emit in standards-coverage output
     compliance_frameworks: list[str] = field(default_factory=list)
 
+    # Explicit capability_profile: YAML block (raw dict, field-name -> value)
+    # — each present field overrides the heuristically-derived
+    # AgentCapabilityProfile field of the same name. See
+    # agent_audit.capability_profile.derive_profile().
+    capability_profile_raw: dict[str, Any] = field(default_factory=dict)
+
     # Provenance: source -> list of fields that source contributed
     provenance_trail: dict[str, list[str]] = field(default_factory=dict)
 
@@ -238,6 +257,14 @@ class TargetManifest:
                 "endpoint": self.runtime.endpoint,
                 "protocol": self.runtime.protocol,
                 "auth_type": self.runtime.auth.type,
+                # Enough to run the same agent again (a saved agent's next audit). Secrets are env var names only;
+                # a provider setting that looks like a literal secret is left out.
+                "target_env": self.runtime.target_env,
+                "timeout_s": self.runtime.timeout_s,
+                "auth": {"type": self.runtime.auth.type, "token_env": self.runtime.auth.token_env,
+                         "header_name": self.runtime.auth.header_name},
+                "provider": {"name": self.runtime.provider.name,
+                             "config": _without_literal_secrets(self.runtime.provider.config)},
             },
             "capabilities": {
                 "max_steps": self.capabilities.max_steps,

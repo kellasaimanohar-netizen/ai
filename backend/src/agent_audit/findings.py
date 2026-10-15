@@ -202,6 +202,43 @@ def pass_finding(
     )
 
 
+def not_tested_finding(
+    *,
+    finding_id: str,
+    phase: str,
+    test_name: str,
+    title: str,
+    reason: str,
+    remediation: str = "",
+    duration_ms: float | None = None,
+) -> Finding:
+    """A check that could not observe the agent. Informational: it neither passes nor fails the agent and is left
+    out of the trust score (descriptions starting with "Skipped:" are counted as skipped)."""
+    return Finding(
+        id=finding_id,
+        phase=phase,
+        test_name=test_name,
+        severity=Severity.INFO,
+        passed=False,
+        title=title,
+        description=f"Skipped: {reason}",
+        remediation=remediation,
+        duration_ms=duration_ms,
+    )
+
+
+# Errors that mean the request never got an answer from the agent (down, wrong address, refused connection),
+# as opposed to the agent answering badly.
+_UNREACHABLE_ERRORS = frozenset({
+    "LiveCallError", "AgentforceError", "UiPathAgentError", "AAAgentError",
+    "ConnectError", "ConnectTimeout", "NetworkError", "TransportError", "PoolTimeout", "ConnectionError",
+})
+
+
+def is_unreachable(exc: BaseException) -> bool:
+    return any(c.__name__ in _UNREACHABLE_ERRORS for c in type(exc).__mro__)
+
+
 def fail_finding(
     *,
     finding_id: str,

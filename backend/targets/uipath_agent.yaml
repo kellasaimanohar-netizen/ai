@@ -23,4 +23,8 @@ sources:
       requires_hitl: true
     security:
       pii_fields: ["email", "tax_id", "bank_account"]
+    capability_profile:
+      archetypes: ["workflow_automation", "financial_decision"]
+      data_mode: "dynamic"     # Get_Invoice reads live invoice/ERP state
+      risk_level: "critical"   # Post_GL_Entry is a destructive financial posting
 compliance_frameworks: ["owasp_agentic_2025", "nist_ai_rmf_genai", "eu_ai_act"]

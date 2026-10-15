@@ -146,11 +146,12 @@ class TestEngineModes:
 
 class TestBaselineDerivation:
     def test_from_manifest(self):
-        import sys
-        sys.path.insert(0, "src")
+        from pathlib import Path
+
         from agent_audit.sources import load_target
 
-        m = load_target("targets/agentforce_agent.yaml")
+        target_path = Path(__file__).resolve().parent.parent / "targets" / "agentforce_agent.yaml"
+        m = load_target(str(target_path))
         base = MonitorBaseline.from_manifest(m)
         assert base.agent_name == "Agentforce_Service_Agent"
         assert "Issue_Refund" in base.destructive_tools

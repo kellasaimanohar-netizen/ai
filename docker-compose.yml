@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: certifyai-db
+    environment:
+      POSTGRES_DB: certifyai
+      POSTGRES_USER: certify
+      POSTGRES_PASSWORD: certify_secure_password_replace_in_prod
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U certify -d certifyai"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: certifyai-backend
+    environment:
+      - DATABASE_URL=postgresql://certify:certify_secure_password_replace_in_prod@db:5432/certifyai
+      # Names must match what backend/security.py and backend/backend.py
+      # actually read (JWT_SECRET, AA_ALLOWED_ORIGINS) — the previous
+      # JWT_SECRET_KEY / CORS_ORIGINS names were silently ignored, so the
+      # backend fell back to CORS/JWT defaults instead of these values.
+      - JWT_SECRET=change-in-production-super-secret-jwt-key-256bit-min
+      - AA_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Baked into the Vite build at build time. Without this, the
+        # production build resolves BACKEND_URL to '' and the browser calls
+        # relative /api/... against the frontend's own nginx container,
+        # which has nothing to forward that to.
+        VITE_API_URL: http://localhost:8000
+    container_name: certifyai-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:

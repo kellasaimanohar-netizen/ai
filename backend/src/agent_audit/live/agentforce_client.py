@@ -45,6 +45,7 @@ from urllib.parse import urlparse
 from agent_audit.exceptions import AgentAuditError, ConfigError
 from agent_audit.live.adapters import detect_and_normalize
 from agent_audit.live.budget import CallBudget
+from agent_audit.netguard import is_non_public
 
 log = logging.getLogger(__name__)
 
@@ -92,8 +93,7 @@ def _assert_public_url(url: str) -> None:
         raise AgentforceError(f"cannot resolve {host!r}: {exc}") from exc
     for info in infos:
         addr = ipaddress.ip_address(info[4][0])
-        if (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+        if is_non_public(addr):
             raise AgentforceError(
                 f"refusing to call non-public address {addr} (host {host!r}) — SSRF guard"
             )

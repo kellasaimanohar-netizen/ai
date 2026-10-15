@@ -72,22 +72,45 @@ DESTRUCTIVE_PHASES: frozenset[str] = frozenset({
     "security_agent",   # alert flood, threat-intel injection
     "browser",          # navigation + unconfirmed destructive actions
     "data_analysis",    # SQL injection probes
+    "multi_agent",      # v10.4: probes literally requesting destructive delegated actions
 })
 
 
 class SafetyGate:
     """Authorizes (or refuses) each phase given the declared environment."""
 
-    def __init__(self, *, env: TargetEnv, live: bool, allow_destructive_override: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        env: TargetEnv,
+        live: bool,
+        allow_destructive_override: bool = False,
+        live_authorized: bool = False,
+    ) -> None:
         self.env = env
         self.live = live
         self.allow_destructive_override = allow_destructive_override
+        # v10.4: explicit confirmation that a live run against this specific
+        # target is authorized — required for ANY phase (not just the
+        # destructive ones) once the target is PRODUCTION, so a live audit
+        # can never silently run against a real production system just
+        # because mock_tools=False was passed. Sandbox/development/staging
+        # don't require this — they're the intended places to run live
+        # probes without extra ceremony.
+        self.live_authorized = live_authorized
 
     def authorize(self, phase_key: str) -> None:
         """Raise ``SandboxViolationError`` if running ``phase_key`` is unsafe."""
         # Mock runs are always safe — no real side effects.
         if not self.live:
             return
+        if self.env is TargetEnv.PRODUCTION and not self.live_authorized:
+            raise SandboxViolationError(
+                f"phase {phase_key!r} would run live against a PRODUCTION endpoint, "
+                "but no explicit authorization was given. Pass live_authorized=True "
+                "(or --confirm-production-audit on the CLI) only when you have "
+                "explicit authorization to test this real system."
+            )
         if phase_key not in DESTRUCTIVE_PHASES:
             return
         # Destructive phase against a live endpoint — sandbox/development is allowed.
@@ -109,5 +132,6 @@ class SafetyGate:
             "target_env": self.env.value,
             "live": self.live,
             "destructive_override": self.allow_destructive_override,
+            "live_authorized": self.live_authorized,
             "guarded_phases": sorted(DESTRUCTIVE_PHASES),
         }

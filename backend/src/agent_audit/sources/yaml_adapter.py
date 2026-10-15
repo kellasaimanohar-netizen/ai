@@ -62,31 +62,31 @@ class YamlAdapter(SourceAdapter):
             target_env=runtime_raw.get("target_env"),
         )
 
-        cap_raw = spec.get("capabilities", {}) or {}
-        destructive = list(cap_raw.get("destructive_tools", []))
+        cap_raw = spec.get("capabilities") or {}
+        destructive = list(cap_raw.get("destructive_tools") or [])
         tools = [
             ToolSpec(name=t, destructive=(t in destructive), declared_in=["yaml"])
-            for t in cap_raw.get("tools", [])
+            for t in (cap_raw.get("tools") or [])
         ]
         capabilities = CapabilitiesSpec(
-            max_steps=int(cap_raw.get("max_steps", 25)),
+            max_steps=int(cap_raw.get("max_steps") or 25),
             context_budget_tokens=cap_raw.get("context_budget_tokens"),
             tools=tools,
             destructive_tool_names=destructive,
-            requires_hitl=bool(cap_raw.get("requires_hitl", False)),
+            requires_hitl=bool(cap_raw.get("requires_hitl") or False),
         )
 
-        slo_raw = spec.get("slos", {}) or {}
+        slo_raw = spec.get("slos") or {}
         slos = SLOSpec(
-            p95_latency_ms=int(slo_raw.get("p95_latency_ms", 10_000)),
-            max_cost_per_task_usd=float(slo_raw.get("max_cost_per_task_usd", 0.10)),
+            p95_latency_ms=int(slo_raw.get("p95_latency_ms") or 10_000),
+            max_cost_per_task_usd=float(slo_raw.get("max_cost_per_task_usd") or 0.10),
         )
 
-        sec_raw = spec.get("security", {}) or {}
+        sec_raw = spec.get("security") or {}
         security = SecuritySpec(
-            pii_fields=list(sec_raw.get("pii_fields", [])),
-            allowed_data_regions=list(sec_raw.get("allowed_data_regions", [])),
-            data_classification=list(sec_raw.get("data_classification", [])),
+            pii_fields=list(sec_raw.get("pii_fields") or []),
+            allowed_data_regions=list(sec_raw.get("allowed_data_regions") or []),
+            data_classification=list(sec_raw.get("data_classification") or []),
         )
 
         manifest = TargetManifest(
@@ -97,7 +97,8 @@ class YamlAdapter(SourceAdapter):
             security=security,
             runbooks_dir=Path(spec["runbooks_dir"]).expanduser() if spec.get("runbooks_dir") else None,
             golden_dataset=self._parse_golden(spec.get("golden_dataset")),
-            compliance_frameworks=list(spec.get("compliance_frameworks", [])),
+            compliance_frameworks=list(spec.get("compliance_frameworks") or []),
+            capability_profile_raw=dict(spec.get("capability_profile") or {}),
         )
 
         # Record provenance: which fields this adapter contributed

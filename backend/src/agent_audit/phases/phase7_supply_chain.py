@@ -11,6 +11,7 @@ Standards: OWASP LLM03 (Supply Chain), ISO/IEC 42001 (supplier governance).
 """
 from __future__ import annotations
 
+import re
 import time
 
 from agent_audit.findings import Evidence, Finding, StandardRef, fail_finding, pass_finding
@@ -21,6 +22,32 @@ PHASE = "supply_chain"
 
 _LLM03 = StandardRef.from_registry("owasp_llm_2025", "LLM03")
 _NIST_GV = StandardRef.from_registry("nist_ai_rmf_genai", "GV-1.1")
+
+# Version strings that declare *something* but don't actually pin a concrete
+# release — these must be treated the same as a missing version. Matched
+# case-insensitively against the whole (stripped) version string.
+_PLACEHOLDER_VERSIONS = {
+    "latest", "*", "any", "stable", "master", "main", "head", "x", "unset", "none",
+}
+# Bare wildcard segments like "1.*", "1.0.*", "^0.0", or a lone range operator
+# with no concrete number (">=", "~", "^") also don't pin a release.
+_PLACEHOLDER_VERSION_PATTERN = re.compile(
+    r"^[\^~]?\d*(\.(\d+|\*|x))*\.\*$|^[\^~>=<]+\s*$", re.IGNORECASE,
+)
+
+
+def _is_unpinned(version: str | None) -> bool:
+    """True if `version` fails to pin a concrete release (missing or placeholder)."""
+    if not version:
+        return True
+    v = version.strip()
+    if not v:
+        return True
+    if v.lower() in _PLACEHOLDER_VERSIONS:
+        return True
+    if _PLACEHOLDER_VERSION_PATTERN.match(v):
+        return True
+    return False
 
 
 async def run_phase(ctx: PhaseContext) -> list[Finding]:
@@ -50,7 +77,7 @@ async def run_phase(ctx: PhaseContext) -> list[Finding]:
 
     # ── pinned_versions ───────────────────────────────────────────────
     t0 = time.perf_counter()
-    unpinned = [d.name for d in m.dependencies if not d.version]
+    unpinned = [d.name for d in m.dependencies if _is_unpinned(d.version)]
     if unpinned:
         out.append(fail_finding(
             finding_id="SC-PIN-001", phase=PHASE, test_name="pinned_versions",

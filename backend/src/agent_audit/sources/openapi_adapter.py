@@ -38,6 +38,8 @@ def _assert_public_url(url: str, *, allow_insecure_http: bool = False) -> None:
     import socket
     from urllib.parse import urlparse
 
+    from agent_audit.netguard import is_non_public
+
     if os.environ.get("AGENT_AUDIT_ALLOW_PRIVATE_FETCH") == "1":
         return
 
@@ -58,8 +60,7 @@ def _assert_public_url(url: str, *, allow_insecure_http: bool = False) -> None:
 
     for info in infos:
         addr = ipaddress.ip_address(info[4][0])
-        if (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+        if is_non_public(addr):
             raise SourceError(
                 f"refusing to fetch openapi spec from non-public address {addr} "
                 f"(host {host!r}) — blocked to prevent SSRF. "

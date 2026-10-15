@@ -58,9 +58,11 @@ def load_target(path: str | Path) -> TargetManifest:
     if not isinstance(raw, dict):
         raise ConfigError(f"target file is not a YAML mapping: {path}")
 
-    agent_name = raw.get("agent_name")
+    agent_name = raw.get("agent_name") or (raw.get("metadata", {}).get("name") if isinstance(raw.get("metadata"), dict) else None)
     if not agent_name:
         raise ConfigError("target YAML missing required field: agent_name")
+    if "agent_name" not in raw:
+        raw["agent_name"] = agent_name
 
     sources = raw.get("sources")
     if sources is None:
@@ -90,7 +92,7 @@ def load_target(path: str | Path) -> TargetManifest:
     fused = _fuse(agent_name, manifests)
 
     # Top-level keys that live on the manifest regardless of sources
-    fused.compliance_frameworks = list(raw.get("compliance_frameworks", []))
+    fused.compliance_frameworks = list(raw.get("compliance_frameworks") or [])
     if "slos" in raw and not any("slos" in m.provenance_trail.get("yaml", []) for m in manifests):
         slo_raw = raw["slos"]
         fused.slos.p95_latency_ms = int(slo_raw.get("p95_latency_ms", fused.slos.p95_latency_ms))
@@ -120,7 +122,12 @@ def _fuse(agent_name: str, parts: list[TargetManifest]) -> TargetManifest:
     for part in parts:
         if part.openapi_spec:
             fused.openapi_spec = part.openapi_spec
-        _merge_scalar(fused, part, "runtime.endpoint")
+        # NOTE: runtime.endpoint is deliberately NOT merged via _merge_scalar
+        # here — it's handled below by the "first non-empty wins" whole-object
+        # runtime block, which also carries over target_env/provider/auth/
+        # timeout_s from the same source. Merging endpoint here first would
+        # make fused_has_runtime look already-true and silently drop those
+        # sibling fields from every part.
         _merge_scalar(fused, part, "capabilities.context_budget_tokens")
         _merge_scalar(fused, part, "capabilities.max_steps")
 
@@ -186,6 +193,10 @@ def _fuse(agent_name: str, parts: list[TargetManifest]) -> TargetManifest:
             fused.runbooks_dir = part.runbooks_dir
         if part.golden_dataset and not fused.golden_dataset:
             fused.golden_dataset = part.golden_dataset
+
+        # capability_profile: declared fields union; first source wins a key
+        for key, value in part.capability_profile_raw.items():
+            fused.capability_profile_raw.setdefault(key, value)
 
         # Provenance trail: merge per source
         for src, fields in part.provenance_trail.items():

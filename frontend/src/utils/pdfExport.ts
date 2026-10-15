@@ -21,7 +21,14 @@ interface FindingItem {
   mitre_atlas?: string[];
 }
 
+interface SignedCertificate {
+  content_hash?: string;
+  signature_b64?: string;
+  audit_version?: string;
+}
+
 export interface PDFExportData {
+  cert?: SignedCertificate | null;
   name?: string;
   agent_name?: string;
   audit_id?: string;
@@ -92,8 +99,8 @@ function drawCard(
 
 // Helper: draw section header with accent bar
 function drawSectionHeader(doc: jsPDF, title: string, x: number, y: number) {
-  // Indigo accent vertical pill
-  doc.setFillColor(79, 70, 229);
+  // Blue accent vertical pill
+  doc.setFillColor(37, 99, 235);
   doc.roundedRect(x, y - 3.8, 2.5, 4.8, 0.8, 0.8, 'F');
 
   doc.setFont('helvetica', 'bold');
@@ -102,18 +109,32 @@ function drawSectionHeader(doc: jsPDF, title: string, x: number, y: number) {
   doc.text(title, x + 5, y);
 }
 
-// Generate a cryptographic mock/real signature hash
-function generateAuditHash(seed: string): string {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash << 5) - hash + seed.charCodeAt(i);
-    hash |= 0;
-  }
-  const hex = Math.abs(hash).toString(16).padStart(8, '0');
-  return `sha256:${hex}e49c71a8f902bd3e1577c4882190bbac639201f893e1b004`;
+const FRAMEWORKS: [string, string][] = [
+  ['owasp_llm_2025', 'OWASP LLM Top 10 (2025)'],
+  ['owasp_agentic_2025', 'OWASP Agentic AI Top 10'],
+  ['nist_ai_rmf_genai', 'NIST AI RMF (GenAI profile)'],
+  ['iso_42001', 'ISO/IEC 42001:2023'],
+  ['eu_ai_act', 'EU AI Act'],
+  ['mitre_atlas', 'MITRE ATLAS'],
+  ['india_dpdp_2023', 'India DPDP Act 2023'],
+];
+
+/** One row per standard, from the findings this test actually mapped to it. Nothing is assumed. */
+function standardsRows(findings: FindingItem[]): string[][] {
+  return FRAMEWORKS.map(([key, label]) => {
+    const hits = findings.filter(f => (f.standards || []).some(st => st.framework === key));
+    if (hits.length === 0) return [label, '-', 'Not assessed by this test', '-'];
+    const ids = Array.from(new Set(hits.flatMap(f => (f.standards || []).filter(st => st.framework === key).map(st => st.identifier)))).sort();
+    const sev = (f: FindingItem) => (f.severity || '').toUpperCase();
+    const critical = hits.filter(f => sev(f) === 'CRITICAL').length;
+    const warning = hits.filter(f => sev(f) === 'WARNING').length;
+    const passed = hits.length - critical - warning;
+    const verdict = critical ? 'FAIL' : warning ? 'WARN' : 'PASS';
+    return [label, ids.join(', '), `${passed} passed, ${warning} warnings, ${critical} critical (${hits.length} checks)`, verdict];
+  });
 }
 
-export const generatePDFReport = (agent: PDFExportData) => {
+export const generatePDFReport = (agent: PDFExportData, options: { save?: boolean } = {}) => {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -125,22 +146,24 @@ export const generatePDFReport = (agent: PDFExportData) => {
   const margin = 14;
   const contentWidth = pageWidth - margin * 2; // 182mm
 
-  const agentName = agent.name || agent.agent_name || 'Autonomous Agent';
+  const agentName = agent.name || agent.agent_name || 'Unnamed agent';
   const cleanAgentName = agentName.replace(/_/g, ' ').toUpperCase();
-  const auditId = agent.audit_id || `AUD-${Math.floor(100000 + Math.random() * 900000)}`;
-  const trustScore = agent.trust_score !== undefined ? agent.trust_score : 50;
+  const auditId = agent.audit_id || '-';
+  const trustScore = agent.trust_score !== undefined ? agent.trust_score : 0;
   const tier = (agent.tier || 'NOT_CERTIFIED').toUpperCase();
-  const evalDate = agent.finished_at || agent.started_at ? new Date(agent.finished_at || agent.started_at!).toLocaleString() : new Date().toLocaleString();
-  const auditorName = agent.tested_by_name || 'Enterprise Security Auditor';
-  const auditorEmail = agent.tested_by_email || 'audits@certifyai.enterprise';
-  const evalMode = (agent.mode || 'VALIDATE').toUpperCase();
-  const durationSec = agent.total_duration_ms ? (agent.total_duration_ms / 1000).toFixed(2) + 's' : '1.42s';
+  const evalDate = agent.finished_at || agent.started_at ? new Date(agent.finished_at || agent.started_at!).toLocaleString() : '-';
+  const auditorName = agent.tested_by_name || '-';
+  const auditorEmail = agent.tested_by_email || '-';
+  const rawMode = (agent.mode || '-').toLowerCase();
+  const evalMode = rawMode === 'validate' ? 'VALIDATE (SIMULATED)' : rawMode === 'live_probe' ? 'LIVE' : rawMode.toUpperCase();
+  const engineVersion = agent.cert?.audit_version;
+  const durationSec = agent.total_duration_ms ? (agent.total_duration_ms / 1000).toFixed(2) + 's' : '-';
 
   const rawObj = agent as any;
-  const passCount = agent.summary?.passed ?? rawObj.pass_count ?? (trustScore >= 80 ? 10 : trustScore >= 50 ? 6 : 0);
-  const critCount = agent.summary?.critical_failures ?? rawObj.critical_count ?? (trustScore < 50 ? 4 : 0);
-  const warnCount = agent.summary?.warnings ?? rawObj.warning_count ?? (trustScore < 80 ? 2 : 0);
-  const totalCount = agent.summary?.total ?? rawObj.total_rules ?? ((passCount + critCount + warnCount) || (agent.findings?.length || 12));
+  const passCount = agent.summary?.passed ?? rawObj.pass_count ?? 0;
+  const critCount = agent.summary?.critical_failures ?? rawObj.critical_count ?? 0;
+  const warnCount = agent.summary?.warnings ?? rawObj.warning_count ?? 0;
+  const totalCount = agent.summary?.total ?? rawObj.total_rules ?? ((passCount + critCount + warnCount) || (agent.findings?.length || 0));
 
   const isCertified = tier === 'CERTIFIED';
   const isConditional = tier === 'CONDITIONAL';
@@ -173,8 +196,8 @@ export const generatePDFReport = (agent: PDFExportData) => {
   doc.setFillColor(15, 23, 42); // #0F172A
   doc.rect(0, 0, pageWidth, headerHeight, 'F');
 
-  // Indigo top accent line
-  doc.setFillColor(79, 70, 229); // #4F46E5
+  // Blue top accent line
+  doc.setFillColor(37, 99, 235); // #2563eb
   doc.rect(0, 0, pageWidth, 2.5, 'F');
 
   // Cyan gradient-like highlight line
@@ -182,7 +205,7 @@ export const generatePDFReport = (agent: PDFExportData) => {
   doc.rect(margin, 2.5, 40, 1, 'F');
 
   // Brand Logo Mark
-  doc.setFillColor(79, 70, 229);
+  doc.setFillColor(37, 99, 235);
   doc.roundedRect(margin, 8.5, 11, 11, 2, 2, 'F');
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
@@ -213,7 +236,7 @@ export const generatePDFReport = (agent: PDFExportData) => {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
   doc.setTextColor(34, 211, 238); // Cyan 400
-  doc.text(`MODE: ${evalMode}  |  ENGINE: v10.4.2`, pageWidth - margin, 20.5, { align: 'right' });
+  doc.text(engineVersion ? `MODE: ${evalMode}  |  ENGINE: v${engineVersion}` : `MODE: ${evalMode}`, pageWidth - margin, 20.5, { align: 'right' });
 
   // 2. Main Title & Status Banner
   let curY = 44;
@@ -321,7 +344,7 @@ export const generatePDFReport = (agent: PDFExportData) => {
 
   // Card 1: Total Checks
   drawCard(doc, statGridX, curY, statCardWidth, statCardHeight, 2.5, [248, 250, 252], [226, 232, 240]);
-  doc.setFillColor(79, 70, 229);
+  doc.setFillColor(37, 99, 235);
   doc.rect(statGridX, curY, statCardWidth, 1.5, 'F');
   doc.setFontSize(7);
   doc.setTextColor(100, 116, 139);
@@ -374,22 +397,22 @@ export const generatePDFReport = (agent: PDFExportData) => {
 
   curY += 3;
 
-  const endpointStr = agent.endpoint || 'http://localhost:8000/chat';
-  const maxSteps = agent.max_steps || 25;
-  const contextTokens = agent.context_budget ? `${agent.context_budget.toLocaleString()} tokens` : '128,000 tokens';
-  const piiFields = agent.pii_fields && agent.pii_fields.length > 0 ? agent.pii_fields.join(', ') : 'email, phone, name, card';
-  const toolsCount = agent.tools ? `${agent.tools.length} active (${agent.tools.slice(0, 3).join(', ')}${agent.tools.length > 3 ? '...' : ''})` : 'Discovered via Runtime';
+  const endpointStr = agent.endpoint || '-';
+  const maxSteps: number | null = agent.max_steps ?? null;
+  const contextTokens = agent.context_budget ? `${agent.context_budget.toLocaleString()} tokens` : '-';
+  const piiFields = agent.pii_fields && agent.pii_fields.length > 0 ? agent.pii_fields.join(', ') : '-';
+  const toolsCount = agent.tools ? `${agent.tools.length} active (${agent.tools.slice(0, 3).join(', ')}${agent.tools.length > 3 ? '...' : ''})` : '-';
 
   autoTable(doc, {
     startY: curY,
     margin: { left: margin, right: margin },
     head: [['Parameter', 'Evaluated Target Specification', 'Security Classification']],
     body: [
-      ['Runtime Invocation Endpoint', endpointStr, 'Confined & TLS Monitored'],
-      ['Execution Step Limit (max_steps)', `${maxSteps} steps max`, maxSteps <= 30 ? 'Safe Loop Limit (Enforced)' : 'High Loop Risk'],
-      ['Context Budget Limit', contextTokens, 'DoS & Budget Guarded'],
-      ['PII Fields Supervised', piiFields, 'Redaction Layer Enforced'],
-      ['Integrated Tools & Actions', toolsCount, agent.destructive_tools?.length ? 'HITL Review Active' : 'Automated Safety Safe']
+      ['Runtime Invocation Endpoint', endpointStr, '-'],
+      ['Execution Step Limit (max_steps)', maxSteps !== null ? `${maxSteps} steps max` : '-', maxSteps === null ? '-' : maxSteps <= 30 ? 'Within loop limit' : 'High loop risk'],
+      ['Context Budget Limit', contextTokens, '-'],
+      ['PII Fields Supervised', piiFields, '-'],
+      ['Integrated Tools & Actions', toolsCount, agent.destructive_tools?.length ? 'Destructive tools declared' : '-']
     ],
     theme: 'grid',
     headStyles: {
@@ -412,28 +435,22 @@ export const generatePDFReport = (agent: PDFExportData) => {
     columnStyles: {
       0: { cellWidth: 52, fontStyle: 'bold' },
       1: { cellWidth: 84 },
-      2: { cellWidth: 46, fontStyle: 'bold', textColor: [79, 70, 229] }
+      2: { cellWidth: 46, fontStyle: 'bold', textColor: [37, 99, 235] }
     }
   });
 
   curY = (doc as any).lastAutoTable.finalY + 7;
 
   // 5. Compliance Framework Mapping Matrix
-  drawSectionHeader(doc, 'REGULATORY STANDARDS & FRAMEWORK CONFORMITY', margin, curY);
+  drawSectionHeader(doc, 'STANDARDS COVERED BY THIS TEST', margin, curY);
 
   curY += 3;
 
   autoTable(doc, {
     startY: curY,
     margin: { left: margin, right: margin },
-    head: [['Standard Framework', 'Control Domains Covered', 'Conformity Status', 'Audit Verdict']],
-    body: [
-      ['OWASP LLM Top 10 (2025)', 'Prompt Injection (LLM01), Insecure Output (LLM02), Supply Chain (LLM05)', critCount === 0 ? 'Compliant' : 'Remediation Required', critCount === 0 ? 'PASS' : 'FLAGGED'],
-      ['NIST AI RMF 1.0', 'GOVERN 1.2, MAP 2.1, MEASURE 3.3, MANAGE 4.2', trustScore >= 75 ? 'Substantially Compliant' : 'Under Review', trustScore >= 75 ? 'PASS' : 'WARN'],
-      ['ISO/IEC 42001:2023', 'Clause 6.1 (AI Risk Assessment), Clause 8.2 (Data Governance)', 'Verified Audit Controls', 'PASS'],
-      ['EU AI Act (Art. 9 / 15)', 'High-Risk AI System Logging, Human Oversight, Robustness', isCertified ? 'Article 15 Ready' : 'Conditional Gaps', isCertified ? 'PASS' : 'CONDITIONAL'],
-      ['MITRE ATLAS Matrix', 'AML.T0054 (LLM Jailbreak), AML.T0043 (Crafted Adversarial Data)', critCount === 0 ? 'Resilient' : 'Exposures Found', critCount === 0 ? 'PASS' : 'FAIL']
-    ],
+    head: [['Standard', 'Controls this test checked', 'Results of those checks', 'Verdict']],
+    body: standardsRows(agent.findings || []),
     theme: 'grid',
     headStyles: {
       fillColor: [15, 23, 42],
@@ -559,7 +576,7 @@ export const generatePDFReport = (agent: PDFExportData) => {
     doc.setFont('helvetica', 'bold');
     doc.text('HEALING RETRIES', kpi3X + 4, curY + 5.5);
     doc.setFontSize(11);
-    doc.setTextColor(79, 70, 229);
+    doc.setTextColor(37, 99, 235);
     doc.text(`${s.retry_attempts || 0}`, kpi3X + 4, curY + 12.5);
 
     // Card 4 (ends precisely at pageWidth - margin = 196mm)
@@ -583,17 +600,17 @@ export const generatePDFReport = (agent: PDFExportData) => {
     const boxHeight = Math.max(18, splitRoot.length * 4 + 10);
 
     doc.setFillColor(248, 250, 252);
-    doc.setDrawColor(79, 70, 229);
+    doc.setDrawColor(37, 99, 235);
     doc.setLineWidth(0.6);
     doc.roundedRect(margin, curY, contentWidth, boxHeight, 2, 2, 'FD');
 
     // Left Accent bar
-    doc.setFillColor(79, 70, 229);
+    doc.setFillColor(37, 99, 235);
     doc.roundedRect(margin, curY, 3, boxHeight, 0.8, 0.8, 'F');
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
-    doc.setTextColor(79, 70, 229);
+    doc.setTextColor(37, 99, 235);
     doc.text('ROOT CAUSE ANALYSIS & DISCOVERED EXPOSURE PATH', margin + 6, curY + 5.5);
 
     doc.setFont('helvetica', 'normal');
@@ -657,7 +674,7 @@ export const generatePDFReport = (agent: PDFExportData) => {
         const val = data.cell.raw;
         if (val === 'CRITICAL') data.cell.styles.textColor = [239, 68, 68];
         else if (val === 'HIGH') data.cell.styles.textColor = [245, 158, 11];
-        else data.cell.styles.textColor = [79, 70, 229];
+        else data.cell.styles.textColor = [37, 99, 235];
       }
     }
   });
@@ -788,7 +805,7 @@ export const generatePDFReport = (agent: PDFExportData) => {
             data.cell.styles.textColor = [245, 158, 11];
             data.cell.styles.fontStyle = 'bold';
           } else {
-            data.cell.styles.textColor = [79, 70, 229];
+            data.cell.styles.textColor = [37, 99, 235];
           }
         }
       }
@@ -825,15 +842,15 @@ export const generatePDFReport = (agent: PDFExportData) => {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
   doc.setTextColor(148, 163, 184);
-  const auditHash = generateAuditHash(`${agentName}-${auditId}-${trustScore}`);
-  doc.text(`Digital Verification Hash: ${auditHash}`, margin + 6, curY + 11.5);
-  doc.text('Evaluated using CertifyAI Autonomous Audit Engine v10.4.2 (Zero-Trust Sandbox Model)', margin + 6, curY + 16);
-  doc.text(`Authorized Auditor: ${auditorName}  |  Department: AI Governance & Risk Supervision`, margin + 6, curY + 20.5);
+  const cert = agent.cert;
+  doc.text(cert?.content_hash ? `Certificate content hash (SHA-256): ${cert.content_hash}` : 'No signed certificate: this test type does not issue one.', margin + 6, curY + 11.5);
+  doc.text(cert?.signature_b64 ? `Signed by the audit engine${engineVersion ? ` v${engineVersion}` : ''}. Verify it with the certificate file, not this PDF.` : `Run by the CertifyAI audit engine${engineVersion ? ` v${engineVersion}` : ''}.`, margin + 6, curY + 16);
+  doc.text(`Tested by: ${auditorName}${auditorEmail !== '-' ? ` (${auditorEmail})` : ''}`, margin + 6, curY + 20.5);
 
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(6.5);
   doc.setTextColor(100, 116, 139);
-  doc.text('This formal certificate confirms automated compliance testing under ISO/IEC 42001 and OWASP LLM Top 10 guidelines.', margin + 6, curY + 26.5);
+  doc.text('This report summarises automated tests. It is not a certification of compliance with any standard or law.', margin + 6, curY + 26.5);
 
   // ==========================================
   // RUNNING HEADERS & FOOTERS ACROSS ALL PAGES
@@ -868,6 +885,6 @@ export const generatePDFReport = (agent: PDFExportData) => {
 
   // Save PDF with clear descriptive filename
   const safeFilename = `${agent.agent_name || agent.name || 'agent'}_security_audit_report.pdf`;
-  doc.save(safeFilename);
+  if (options.save !== false) doc.save(safeFilename);
   return doc;
 };

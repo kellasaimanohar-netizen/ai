@@ -12,3 +12,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Generated report PDFs (kept on this computer, never committed)
+storage/
+

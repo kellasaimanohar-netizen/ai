@@ -1,27 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import {
-  Clock,
-  Search,
-  Download,
-  ShieldCheck,
-  ShieldAlert,
-  ShieldX,
-  RefreshCw,
-  Play,
-  Eye,
-  X,
-  Code,
-  CheckCircle2,
-  AlertTriangle,
-  FileText,
-  Layers,
-  ChevronDown,
-  ChevronRight,
-  TrendingUp,
-  Sparkles,
-  History
-} from 'lucide-react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Bot, ChevronDown, ChevronRight, Clock, Download, Eye, Play, RefreshCw, Trash2, X } from 'lucide-react';
 import { generatePDFReport } from '../../utils/pdfExport';
+import { PdfHoverPreview } from '../PdfHoverPreview';
+import { apiFetch } from '../../utils/apiClient';
+import {
+  Alert, Badge, Button, EmptyState, PageHeader, Pagination, Panel, SearchInput, Segmented, SimulatedNotice, SortHeader, TableSkeleton,
+  TierBadge, Tooltip, isSimulated, modeLabel, scoreColor, useFocusTrap, type SortDir, type Tone, fmtScore,
+} from '../ui';
+import { FindingBadges } from '../FindingCounts';
+import { ReportDownloadMenu } from '../ReportDownload';
+import { fetchTestResult } from '../../utils/reportPdf';
+import { DeleteTestDialog } from '../DeleteTestDialog';
 
 interface UserTestHistoryProps {
   user: {
@@ -35,6 +25,40 @@ interface UserTestHistoryProps {
   onStartNewTest: () => void;
 }
 
+type SortField = 'agent_name' | 'status' | 'created_at' | 'trust_score';
+type DateFilter = 'all' | 'today' | '7d' | '30d';
+type StatusFilter = 'ALL' | 'CERTIFIED' | 'NOT_CERTIFIED';
+type FindingFilter = 'ALL' | 'CRITICAL' | 'WARNING' | 'PASS';
+
+const PAGE_SIZE = 10;
+
+const formatDuration = (ms: number) => {
+  if (!ms) return '-';
+  const totalSec = Math.round(ms / 1000);
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+};
+
+const formatDateTime = (isoStr: string) => {
+  if (!isoStr) return { date: '-', time: '' };
+  const d = new Date(isoStr);
+  if (Number.isNaN(d.getTime())) return { date: isoStr, time: '' };
+  return {
+    date: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+    time: d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false }),
+  };
+};
+
+const sevTone = (sev: string): Tone => (sev === 'CRITICAL' ? 'critical' : sev === 'WARNING' ? 'warning' : sev === 'PASS' ? 'pass' : 'neutral');
+
+const verdict = (t: any) => {
+  if (t.tier === 'FRAMEWORK_VALIDATION_ONLY') return 'Run against a mock target, so this result does not certify the agent.';
+  if (t.tier === 'CERTIFIED') return 'No critical findings, a score of 90 or more and at most 3 warnings.';
+  if ((t.critical_count || 0) > 0) return `${t.critical_count} critical finding${t.critical_count === 1 ? '' : 's'} to fix before deployment.`;
+  return 'Review the warnings before deployment.';
+};
+
 export const UserTestHistory: React.FC<UserTestHistoryProps> = ({
   user,
   initialSelectedTestId,
@@ -42,74 +66,47 @@ export const UserTestHistory: React.FC<UserTestHistoryProps> = ({
   onStartNewTest
 }) => {
   const [tests, setTests] = useState<any[]>([]);
-  const [groupedAgents, setGroupedAgents] = useState<any[]>([]);
-  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped');
-  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [dateFilter, setDateFilter] = useState<'all' | 'today' | '7d' | '30d'>('all');
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'CERTIFIED' | 'CONDITIONAL' | 'NOT_CERTIFIED'>('ALL');
+  const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
 
-  // Detail Modal State
+  const [sort, setSort] = useState<{ key: SortField; dir: SortDir }>({ key: 'created_at', dir: 'desc' });
+  const [currentPage, setCurrentPage] = useState<number>(1);
+
   const [selectedTestDetail, setSelectedTestDetail] = useState<any | null>(null);
+  const [deleting, setDeleting] = useState<any | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
 
-  const BACKEND_URL = import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== '' ? import.meta.env.VITE_API_URL : (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '');
-
   const fetchHistory = async () => {
     setIsLoading(true);
+    setError(null);
     try {
-      let url = `${BACKEND_URL}/api/user/tests?limit=100&group_by_agent=true`;
+      let url = `/api/user/tests?limit=100`;
       if (searchTerm) url += `&search=${encodeURIComponent(searchTerm)}`;
       if (statusFilter !== 'ALL') url += `&status=${encodeURIComponent(statusFilter)}`;
       if (dateFilter !== 'all') url += `&date_filter=${encodeURIComponent(dateFilter)}`;
 
-      const res = await fetch(url, {
-        headers: { 'X-User-Id': String(user?.id || 2) }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTests(data.tests || []);
-        if (data.grouped_agents) {
-          setGroupedAgents(data.grouped_agents || []);
-          // Auto-expand first agent with multiple versions if none selected
-          if (!expandedAgent && data.grouped_agents.length > 0) {
-            setExpandedAgent(data.grouped_agents[0].name);
-          }
-        }
-      }
+      const res = await apiFetch(url);
+      if (!res.ok) throw new Error('Your test history could not be loaded.');
+      const data = await res.json();
+      setTests(data.tests || []);
     } catch (err) {
-      console.error('Failed to load test history:', err);
+      setError(err instanceof Error ? err.message : 'Your test history could not be loaded.');
     } finally {
       setIsLoading(false);
+      setLoaded(true);
     }
-  };
-
-  useEffect(() => {
-    fetchHistory();
-  }, [user?.id, dateFilter, statusFilter]);
-
-  useEffect(() => {
-    if (initialSelectedTestId) {
-      handleOpenTestDetail(initialSelectedTestId);
-    }
-  }, [initialSelectedTestId]);
-
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    fetchHistory();
   };
 
   const handleOpenTestDetail = async (testId: number) => {
     setIsDetailLoading(true);
-    if (onViewTestResult) {
-      onViewTestResult(testId);
-    }
+    if (onViewTestResult) onViewTestResult(testId);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/user/tests/${testId}`, {
-        headers: { 'X-User-Id': String(user?.id || 2) }
-      });
+      const res = await apiFetch(`/api/user/tests/${testId}`);
       if (res.ok) {
         const data = await res.json();
         const testData = data.test;
@@ -123,834 +120,405 @@ export const UserTestHistory: React.FC<UserTestHistoryProps> = ({
       } else {
         const local = tests.find(t => t.id === testId);
         if (local) setSelectedTestDetail(local);
+        else setError('That test could not be opened.');
       }
-    } catch (err) {
-      console.error('Failed to fetch test details:', err);
+    } catch {
       const local = tests.find(t => t.id === testId);
       if (local) setSelectedTestDetail(local);
+      else setError('That test could not be opened.');
     } finally {
       setIsDetailLoading(false);
     }
   };
 
-  const formatDuration = (ms: number) => {
-    if (!ms) return '1m 20s';
-    const totalSec = Math.round(ms / 1000);
-    const mins = Math.floor(totalSec / 60);
-    const secs = totalSec % 60;
-    return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-  };
+  useEffect(() => {
+    fetchHistory();
+  }, [user?.id, dateFilter, statusFilter]);
 
-  const formatDate = (isoStr: string) => {
-    if (!isoStr) return 'Today';
-    try {
-      const d = new Date(isoStr);
-      return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-    } catch {
-      return isoStr;
-    }
-  };
+  useEffect(() => {
+    if (initialSelectedTestId) handleOpenTestDetail(initialSelectedTestId);
+  }, [initialSelectedTestId]);
 
   const handleDownloadPDF = async (test: any) => {
-    setDownloadingId(test.id);
     try {
-      let fullObj = test.full_result || test;
-      if (!fullObj.findings || fullObj.findings.length === 0) {
-        const res = await fetch(`${BACKEND_URL}/api/user/tests/${test.id}`, {
-          headers: { 'X-User-Id': String(user?.id || 2) }
-        });
+      setDownloadingId(test.id);
+      // Prefer the PDF stored on the server
+      try {
+        const res = await apiFetch(`/api/user/tests/${test.id}/pdf`);
         if (res.ok) {
-          const data = await res.json();
-          const detail = data.test;
-          fullObj = (detail.full_result && Object.keys(detail.full_result).length > 0) ? detail.full_result : detail;
+          const blob = await res.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${(test.agent_name || 'Agent').replace(/\s+/g, '_')}_audit_report_${test.audit_id || test.id}.pdf`;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+          return;
         }
+      } catch {
+        /* fall back to building the PDF in the browser */
       }
 
+      let findingsList = test.findings || [];
+      if (!findingsList.length && test.full_result && test.full_result.findings) findingsList = test.full_result.findings;
+
+      // generatePDFReport saves the file itself
       generatePDFReport({
-        ...fullObj,
-        name: `${fullObj.agent_name || test.agent_name} (${test.version || 'v1'})`,
-        agent_name: fullObj.agent_name || test.agent_name,
-        audit_id: fullObj.audit_id || test.audit_id,
-        trust_score: fullObj.trust_score !== undefined ? fullObj.trust_score : test.trust_score,
-        tier: fullObj.tier || test.tier,
-        started_at: fullObj.created_at || test.created_at,
-        finished_at: fullObj.created_at || test.created_at,
-        tested_by_name: user?.name || 'Enterprise Security Auditor',
-        tested_by_email: user?.email || 'audits@certifyai.enterprise',
-        summary: fullObj.summary || {
-          passed: test.pass_count || 0,
+        agent_name: test.agent_name,
+        trust_score: test.trust_score || 0,
+        tier: test.tier || 'NOT_CERTIFIED',
+        audit_id: test.audit_id || `AUD-${test.id}`,
+        findings: findingsList,
+        summary: {
           critical_failures: test.critical_count || 0,
           warnings: test.warning_count || 0,
+          passed: test.pass_count || 0,
           total: (test.pass_count || 0) + (test.critical_count || 0) + (test.warning_count || 0)
         }
       });
-    } catch (err) {
-      console.error('Failed to generate PDF:', err);
+    } catch {
+      setError('The PDF could not be created. Try again.');
     } finally {
       setDownloadingId(null);
     }
   };
 
-  const filteredGroupedAgents = groupedAgents.filter(ag =>
-    ag.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (ag.versions && ag.versions.some((v: any) => v.agent_name?.toLowerCase().includes(searchTerm.toLowerCase())))
-  );
+  const handleSort = (field: SortField) => {
+    setSort(s => (s.key === field ? { key: field, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key: field, dir: 'desc' }));
+    setCurrentPage(1);
+  };
+
+  type AgentTypeFilter = 'ALL' | 'LIVE' | 'TESTING';
+
+  const [agentTypeFilter, setAgentTypeFilter] = useState<AgentTypeFilter>('ALL');
+
+  const filteredAndSortedTests = useMemo(() => {
+    let result = [...tests];
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(t =>
+        (t.agent_name || '').toLowerCase().includes(term) ||
+        (t.audit_id || '').toLowerCase().includes(term) ||
+        (t.notes || '').toLowerCase().includes(term)
+      );
+    }
+    if (agentTypeFilter === 'LIVE') {
+      result = result.filter(t => t.mode === 'live_probe' || t.test_type === 'LIVE' || (t.notes || '').toLowerCase().includes('live'));
+    } else if (agentTypeFilter === 'TESTING') {
+      result = result.filter(t => t.mode !== 'live_probe' && t.test_type !== 'LIVE' && !(t.notes || '').toLowerCase().includes('live'));
+    }
+
+    if (statusFilter === 'CERTIFIED') result = result.filter(t => t.tier === 'CERTIFIED');
+    else if (statusFilter === 'NOT_CERTIFIED') result = result.filter(t => t.tier !== 'CERTIFIED');
+
+    result.sort((a, b) => {
+      let comparison: number;
+      if (sort.key === 'agent_name') comparison = (a.agent_name || '').localeCompare(b.agent_name || '');
+      else if (sort.key === 'status') comparison = (a.tier === 'CERTIFIED' ? 0 : 1) - (b.tier === 'CERTIFIED' ? 0 : 1);
+      else if (sort.key === 'trust_score') comparison = (a.trust_score || 0) - (b.trust_score || 0);
+      else comparison = new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+      return sort.dir === 'asc' ? comparison : -comparison;
+    });
+    return result;
+  }, [tests, searchTerm, agentTypeFilter, statusFilter, sort]);
+
+  const totalTests = filteredAndSortedTests.length;
+  const totalPages = Math.max(1, Math.ceil(totalTests / PAGE_SIZE));
+  const validCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedTests = filteredAndSortedTests.slice((validCurrentPage - 1) * PAGE_SIZE, validCurrentPage * PAGE_SIZE);
+
+  const summaryMetrics = useMemo(() => ({
+    total: totalTests,
+    certified: filteredAndSortedTests.filter(t => t.tier === 'CERTIFIED').length,
+    notCertified: filteredAndSortedTests.filter(t => t.tier === 'NOT_CERTIFIED').length,
+    validationOnly: filteredAndSortedTests.filter(t => t.tier === 'FRAMEWORK_VALIDATION_ONLY').length,
+    criticals: filteredAndSortedTests.reduce((acc, t) => acc + (t.critical_count || 0), 0),
+  }), [filteredAndSortedTests, totalTests]);
+
+  const filtered = searchTerm.trim() !== '' || dateFilter !== 'all' || statusFilter !== 'ALL' || agentTypeFilter !== 'ALL';
+  const clearFilters = () => { setSearchTerm(''); setDateFilter('all'); setStatusFilter('ALL'); setAgentTypeFilter('ALL'); setCurrentPage(1); };
 
   return (
-    <div className="animate-slideup" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      
-      {/* Header */}
-      <div className="glass-card" style={{ padding: '22px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
-          <h1 style={{ fontSize: '22px', fontWeight: '800', color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Clock size={20} style={{ color: 'var(--accent-primary)' }} />
-            Test History & Evolution Audit
-          </h1>
-          <p style={{ margin: '4px 0 0 0', fontSize: '13.5px', color: 'var(--text-secondary)' }}>
-            Each agent is consolidated into 1 unified instance tracking all version iterations (v1, v2, v3...) and score gains.
-          </p>
-        </div>
+    <div className="page-stack animate-slideup">
+      <PageHeader
+        title="Test history"
+        subtitle="Every test you have run, with its score, findings and downloadable reports."
+        actions={
+          <>
+            <Button icon={RefreshCw} onClick={fetchHistory} loading={isLoading && loaded}>Refresh</Button>
+            <Button variant="primary" icon={Play} onClick={onStartNewTest}>Test an agent</Button>
+          </>
+        }
+      />
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          {/* View Mode Toggle */}
-          <div style={{
-            display: 'flex',
-            background: 'var(--bg-panel-hover)',
-            padding: '4px',
-            borderRadius: '10px',
-            border: '1px solid var(--border-subtle)',
-            gap: '3px'
-          }}>
-            <button
-              onClick={() => setViewMode('grouped')}
-              style={{
-                padding: '7px 14px',
-                borderRadius: '7px',
-                fontSize: '12.5px',
-                fontWeight: '700',
-                border: 'none',
-                background: viewMode === 'grouped' ? 'var(--accent-primary)' : 'transparent',
-                color: viewMode === 'grouped' ? '#ffffff' : 'var(--text-secondary)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                boxShadow: viewMode === 'grouped' ? '0 2px 8px rgba(79, 70, 229, 0.35)' : 'none',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              <Layers size={14} />
-              Grouped by Agent (v1, v2, v3)
-            </button>
-            <button
-              onClick={() => setViewMode('flat')}
-              style={{
-                padding: '7px 14px',
-                borderRadius: '7px',
-                fontSize: '12.5px',
-                fontWeight: '700',
-                border: 'none',
-                background: viewMode === 'flat' ? 'var(--accent-primary)' : 'transparent',
-                color: viewMode === 'flat' ? '#ffffff' : 'var(--text-secondary)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                boxShadow: viewMode === 'flat' ? '0 2px 8px rgba(79, 70, 229, 0.35)' : 'none',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              <History size={14} />
-              Flat Log ({tests.length})
-            </button>
-          </div>
+      {error && <Alert tone="critical" title={error} action={<Button size="sm" onClick={() => { setError(null); fetchHistory(); }}>Try again</Button>} />}
 
-          <button className="btn btn-primary" onClick={onStartNewTest} style={{ padding: '8px 16px', fontSize: '13px', gap: '6px' }}>
-            <Play size={14} fill="currentColor" />
-            <span>+ Test New Agent</span>
-          </button>
-        </div>
-      </div>
+      <form className="filter-bar" onSubmit={e => { e.preventDefault(); setCurrentPage(1); fetchHistory(); }}>
+        <SearchInput value={searchTerm} onChange={v => { setSearchTerm(v); setCurrentPage(1); }} placeholder="Search agent name or audit ID" label="Search tests" width="auto" />
+        {/* No "All" option: clicking the selected type or result again shows everything */}
+        <Segmented<AgentTypeFilter> label="Agent type, click again to show all" value={agentTypeFilter} onChange={v => { setAgentTypeFilter(v === agentTypeFilter ? 'ALL' : v); setCurrentPage(1); }} items={[
+          { value: 'LIVE', label: 'Live Agents' },
+          { value: 'TESTING', label: 'Testing Agents' },
+        ]} />
+        <Segmented<DateFilter> label="Date" value={dateFilter} onChange={v => { setDateFilter(v); setCurrentPage(1); }} items={[
+          { value: 'all', label: 'All time' }, { value: 'today', label: 'Today' }, { value: '7d', label: '7 days' }, { value: '30d', label: '30 days' },
+        ]} />
+        <Segmented<StatusFilter> label="Result, click again to show all" value={statusFilter} onChange={v => { setStatusFilter(v === statusFilter ? 'ALL' : v); setCurrentPage(1); }} items={[
+          { value: 'CERTIFIED', label: 'Certified' }, { value: 'NOT_CERTIFIED', label: 'Not certified' },
+        ]} />
+        {filtered && <Button variant="ghost" onClick={clearFilters}>Clear filters</Button>}
+      </form>
 
-      {/* Filter Toolbar */}
-      <div className="glass-card" style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-          
-          {/* Search Input */}
-          <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: '8px', flex: 1, minWidth: '240px', maxWidth: '400px' }}>
-            <div style={{ position: 'relative', width: '100%' }}>
-              <input
-                type="text"
-                className="form-input"
-                placeholder="Search agent name..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                style={{ paddingLeft: '34px', fontSize: '13px' }}
-              />
-              <Search size={15} style={{ position: 'absolute', left: '11px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
-            </div>
-            <button type="submit" className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: '12.5px', fontWeight: '600' }}>
-              Search
-            </button>
-          </form>
-
-          {/* Quick Date Filters */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: '700' }}>Date:</span>
-            <div style={{
-              display: 'flex',
-              background: 'var(--bg-panel-hover)',
-              padding: '3px',
-              borderRadius: '8px',
-              border: '1px solid var(--border-subtle)',
-              gap: '3px'
-            }}>
-              {(['all', 'today', '7d', '30d'] as const).map(d => (
-                <button
-                  key={d}
-                  onClick={() => setDateFilter(d)}
-                  style={{
-                    padding: '5px 12px',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: '700',
-                    border: 'none',
-                    background: dateFilter === d ? '#10b981' : 'transparent',
-                    color: dateFilter === d ? '#ffffff' : 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    boxShadow: dateFilter === d ? '0 2px 6px rgba(16, 185, 129, 0.35)' : 'none',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  {d === 'all' ? 'All' : d === 'today' ? 'Today' : d === '7d' ? '7 Days' : '30 Days'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Quick Status Filters */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: '700' }}>Status:</span>
-            <div style={{
-              display: 'flex',
-              background: 'var(--bg-panel-hover)',
-              padding: '3px',
-              borderRadius: '8px',
-              border: '1px solid var(--border-subtle)',
-              gap: '3px'
-            }}>
-              {(['ALL', 'CERTIFIED', 'CONDITIONAL', 'NOT_CERTIFIED'] as const).map(s => (
-                <button
-                  key={s}
-                  onClick={() => setStatusFilter(s)}
-                  style={{
-                    padding: '5px 12px',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: '700',
-                    border: 'none',
-                    background: statusFilter === s ? 'var(--accent-primary)' : 'transparent',
-                    color: statusFilter === s ? '#ffffff' : 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    boxShadow: statusFilter === s ? '0 2px 6px rgba(79, 70, 229, 0.35)' : 'none',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  {s === 'ALL' ? 'All' : s === 'CERTIFIED' ? 'Certified' : s === 'CONDITIONAL' ? 'Conditional' : 'Not Certified'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-        </div>
-      </div>
-
-      {/* ========================================================================= */}
-      {/* 1. GROUPED BY AGENT VIEW (ONE INSTANCE PER AGENT WITH v1, v2, v3...) */}
-      {/* ========================================================================= */}
-      {viewMode === 'grouped' ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {isLoading ? (
-            <div className="glass-card" style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-              <RefreshCw size={22} className="spin-animation" style={{ margin: '0 auto 10px auto', display: 'block', color: 'var(--accent-primary)' }} />
-              Grouping agent test runs and version progression...
-            </div>
-          ) : filteredGroupedAgents.length > 0 ? (
-            filteredGroupedAgents.map((ag) => {
-              const isExpanded = expandedAgent === ag.name;
-              const versions = ag.versions || [];
-              const totalVersions = versions.length;
-              const isTested = ag.latest_score !== null;
-              const isCertified = ag.latest_status === 'CERTIFIED';
-              const isConditional = ag.latest_status === 'CONDITIONAL';
-              const scoreColor = isTested
-                ? (isCertified ? '#10b981' : isConditional ? '#d97706' : '#ef4444')
-                : 'var(--text-muted)';
-              const hasImprovement = ag.score_improvement !== null && ag.score_improvement !== undefined && ag.score_improvement > 0;
-
-              return (
-                <div
-                  key={ag.id || ag.name}
-                  className="glass-card"
-                  style={{
-                    padding: '0',
-                    overflow: 'hidden',
-                    border: isExpanded ? '1px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
-                    transition: 'all 0.2s ease',
-                    boxShadow: isExpanded ? '0 8px 24px rgba(0,0,0,0.06)' : 'none'
-                  }}
-                >
-                  {/* Agent Card Header Row */}
-                  <div
-                    onClick={() => setExpandedAgent(isExpanded ? null : ag.name)}
-                    style={{
-                      padding: '18px 24px',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      flexWrap: 'wrap',
-                      gap: '16px',
-                      cursor: 'pointer',
-                      background: isExpanded ? 'rgba(79, 70, 229, 0.04)' : 'transparent'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                      <div style={{
-                        width: '34px',
-                        height: '34px',
-                        borderRadius: '8px',
-                        background: 'rgba(79, 70, 229, 0.1)',
-                        border: '1px solid rgba(79, 70, 229, 0.2)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: 'var(--accent-primary)'
-                      }}>
-                        {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                      </div>
-
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <h3 style={{ fontSize: '16.5px', fontWeight: '800', color: 'var(--text-primary)', margin: 0 }}>
-                            {ag.name}
-                          </h3>
-                          <span style={{
-                            fontSize: '11px',
-                            fontWeight: '800',
-                            padding: '2px 8px',
-                            borderRadius: '10px',
-                            background: 'rgba(56, 189, 248, 0.15)',
-                            color: 'var(--accent-cyan, #0284c7)',
-                            border: '1px solid rgba(56, 189, 248, 0.3)'
-                          }}>
-                            {ag.latest_version} (Latest)
-                          </span>
-                          <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: '500' }}>
-                            • {totalVersions} {totalVersions === 1 ? 'Iteration' : 'Iterations'}
-                          </span>
-                        </div>
-
-                        {/* Version progression pill chain */}
-                        {ag.version_progression && ag.version_progression.length > 0 && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
-                            {ag.version_progression.map((ver: any, vIdx: number) => {
-                              const vColor = ver.tier === 'CERTIFIED' ? '#10b981' : ver.tier === 'CONDITIONAL' ? '#d97706' : '#ef4444';
-                              const isLatest = vIdx === ag.version_progression.length - 1;
-
-                              return (
-                                <span
-                                  key={vIdx}
-                                  style={{
-                                    fontSize: '11px',
-                                    padding: '2px 8px',
-                                    borderRadius: '5px',
-                                    background: isLatest ? 'rgba(56, 189, 248, 0.15)' : 'var(--bg-panel-hover)',
-                                    color: 'var(--text-primary)',
-                                    border: isLatest ? '1px solid var(--accent-cyan, #0284c7)' : '1px solid var(--border-subtle)',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '4px',
-                                    fontWeight: '600'
-                                  }}
-                                >
-                                  <span>{ver.version}:</span> <strong style={{ color: vColor }}>{ver.score}%</strong>
-                                </span>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-                      {hasImprovement && (
-                        <div style={{
-                          background: 'rgba(16, 185, 129, 0.12)',
-                          border: '1px solid rgba(16, 185, 129, 0.3)',
-                          color: '#10b981',
-                          padding: '4px 10px',
-                          borderRadius: '12px',
-                          fontSize: '12px',
-                          fontWeight: '800',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px'
-                        }}>
-                          <TrendingUp size={13} />
-                          +{ag.score_improvement}% gain since v1
-                        </div>
-                      )}
-
-                      <div style={{ textAlign: 'right' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '700', display: 'block' }}>
-                          Current Score ({ag.latest_version})
-                        </span>
-                        <span style={{ fontSize: '20px', fontWeight: '900', color: scoreColor }}>
-                          {isTested ? `${ag.latest_score}%` : '—'}
-                        </span>
-                      </div>
-
-                      <span className={`status-pill ${ag.latest_status?.toLowerCase()}`} style={{
-                        padding: '4px 12px',
-                        borderRadius: '12px',
-                        fontSize: '11.5px',
-                        fontWeight: '800'
-                      }}>
-                        {ag.latest_status || 'UNTESTED'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Expanded Version Timeline Sub-Table */}
-                  {isExpanded && (
-                    <div style={{
-                      borderTop: '1px solid var(--border-subtle)',
-                      background: 'var(--bg-panel-hover)',
-                      padding: '18px 24px'
-                    }}>
-                      <div style={{
-                        fontSize: '12px',
-                        color: 'var(--text-primary)',
-                        textTransform: 'uppercase',
-                        fontWeight: '800',
-                        letterSpacing: '0.5px',
-                        marginBottom: '12px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px'
-                      }}>
-                        <Layers size={14} style={{ color: 'var(--accent-primary)' }} />
-                        <span>Version History & Test Iterations for {ag.name}</span>
-                      </div>
-
-                      <div style={{
-                        borderRadius: '10px',
-                        overflow: 'hidden',
-                        border: '1px solid var(--border-subtle)',
-                        background: 'var(--bg-panel)'
-                      }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                          <thead>
-                            <tr style={{
-                              color: 'var(--text-secondary)',
-                              background: 'var(--bg-panel-hover)',
-                              textAlign: 'left',
-                              borderBottom: '1px solid var(--border-subtle)'
-                            }}>
-                              <th style={{ padding: '10px 14px', fontWeight: '700' }}>Version</th>
-                              <th style={{ padding: '10px 14px', fontWeight: '700' }}>Date Tested</th>
-                              <th style={{ padding: '10px 14px', fontWeight: '700' }}>Mode</th>
-                              <th style={{ padding: '10px 14px', fontWeight: '700' }}>Score</th>
-                              <th style={{ padding: '10px 14px', fontWeight: '700' }}>Delta</th>
-                              <th style={{ padding: '10px 14px', fontWeight: '700' }}>Tier Status</th>
-                              <th style={{ padding: '10px 14px', fontWeight: '700' }}>Criticals</th>
-                              <th style={{ padding: '10px 14px', fontWeight: '700' }}>Duration</th>
-                              <th style={{ padding: '10px 14px', textAlign: 'right', fontWeight: '700' }}>Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(ag.versions || []).map((ver: any, vIdx: number) => {
-                              const isLatestVer = vIdx === (ag.versions.length - 1);
-                              const vColor = ver.tier === 'CERTIFIED' ? '#10b981' : ver.tier === 'CONDITIONAL' ? '#d97706' : '#ef4444';
-                              const isDownloading = downloadingId === ver.id;
-
-                              return (
-                                <tr
-                                  key={ver.id || vIdx}
-                                  style={{
-                                    borderBottom: '1px solid var(--border-subtle)',
-                                    background: isLatestVer ? 'rgba(79, 70, 229, 0.04)' : 'transparent'
-                                  }}
-                                  className="table-row-hover"
-                                >
-                                  <td style={{ padding: '12px 14px' }}>
-                                    <span style={{
-                                      fontWeight: '800',
-                                      color: isLatestVer ? 'var(--accent-primary)' : 'var(--text-primary)',
-                                      background: isLatestVer ? 'rgba(79, 70, 229, 0.12)' : 'var(--bg-panel-hover)',
-                                      padding: '3px 8px',
-                                      borderRadius: '6px',
-                                      border: isLatestVer ? '1px solid rgba(79, 70, 229, 0.3)' : '1px solid var(--border-subtle)',
-                                      fontSize: '11.5px'
-                                    }}>
-                                      {ver.version} {isLatestVer && '★ (Latest)'}
-                                    </span>
-                                  </td>
-                                  <td style={{ padding: '12px 14px', color: 'var(--text-primary)', fontWeight: '500' }}>
-                                    {formatDate(ver.created_at)}
-                                  </td>
-                                  <td style={{ padding: '12px 14px' }}>
-                                    <span style={{
-                                      textTransform: 'uppercase',
-                                      fontSize: '11px',
-                                      fontWeight: '700',
-                                      padding: '2px 7px',
-                                      borderRadius: '4px',
-                                      background: ver.mode === 'certify' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(56, 189, 248, 0.15)',
-                                      color: ver.mode === 'certify' ? '#10b981' : 'var(--accent-cyan, #0284c7)'
-                                    }}>
-                                      {ver.mode || 'validate'}
-                                    </span>
-                                  </td>
-                                  <td style={{ padding: '12px 14px', fontWeight: '800', fontSize: '14px', color: vColor }}>
-                                    {ver.trust_score}%
-                                  </td>
-                                  <td style={{ padding: '12px 14px' }}>
-                                    {ver.score_delta !== undefined && ver.score_delta !== 0 ? (
-                                      <span style={{ color: ver.score_delta > 0 ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: '12px' }}>
-                                        {ver.score_delta > 0 ? `+${ver.score_delta}%` : `${ver.score_delta}%`}
-                                      </span>
-                                    ) : (
-                                      <span style={{ color: 'var(--text-secondary)' }}>—</span>
-                                    )}
-                                  </td>
-                                  <td style={{ padding: '12px 14px' }}>
-                                    <span className={`status-pill ${ver.tier?.toLowerCase()}`} style={{ fontSize: '10.5px', padding: '2px 8px', fontWeight: '700' }}>
-                                      {ver.tier}
-                                    </span>
-                                  </td>
-                                  <td style={{ padding: '12px 14px', color: ver.critical_count > 0 ? '#ef4444' : 'var(--text-secondary)', fontWeight: ver.critical_count > 0 ? '700' : '500' }}>
-                                    {ver.critical_count || 0}
-                                  </td>
-                                  <td style={{ padding: '12px 14px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: '12px', fontWeight: '500' }}>
-                                    {formatDuration(ver.duration_ms)}
-                                  </td>
-                                  <td style={{ padding: '12px 14px', textAlign: 'right' }}>
-                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
-                                      <button
-                                        className="btn btn-ghost"
-                                        onClick={() => handleOpenTestDetail(ver.id)}
-                                        style={{ padding: '4px 10px', fontSize: '12px', color: 'var(--accent-primary)', fontWeight: '700', gap: '4px' }}
-                                      >
-                                        <Eye size={13} /> View
-                                      </button>
-                                      <button
-                                        className="btn btn-ghost"
-                                        onClick={() => handleDownloadPDF(ver)}
-                                        disabled={isDownloading}
-                                        style={{ padding: '4px 8px', fontSize: '12px', color: 'var(--text-secondary)' }}
-                                        title="Download Certified PDF Report"
-                                      >
-                                        {isDownloading ? <RefreshCw size={13} className="spin-animation" /> : <Download size={13} />}
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          ) : (
-            <div className="glass-card" style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-              No agent test records found matching your filters.
-            </div>
-          )}
-        </div>
-      ) : (
-        /* ========================================================================= */
-        /* 2. FLAT LOG VIEW */
-        /* ========================================================================= */
-        <div className="glass-card" style={{ padding: '0', overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="enterprise-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-              <thead>
-                <tr style={{ background: 'rgba(0,0,0,0.3)', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', textAlign: 'left' }}>
-                  <th style={{ padding: '12px 16px', fontWeight: '600' }}>Date</th>
-                  <th style={{ padding: '12px 16px', fontWeight: '600' }}>Agent Name & Version</th>
-                  <th style={{ padding: '12px 16px', fontWeight: '600' }}>Mode</th>
-                  <th style={{ padding: '12px 16px', fontWeight: '600' }}>Trust Score</th>
-                  <th style={{ padding: '12px 16px', fontWeight: '600' }}>Delta</th>
-                  <th style={{ padding: '12px 16px', fontWeight: '600' }}>Status</th>
-                  <th style={{ padding: '12px 16px', fontWeight: '600' }}>Criticals</th>
-                  <th style={{ padding: '12px 16px', fontWeight: '600' }}>Duration</th>
-                  <th style={{ padding: '12px 16px', fontWeight: '600', textAlign: 'right' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {isLoading ? (
+      <Panel
+        flush
+        footer={loaded && totalTests > 0 ? (
+          <span style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <span>{summaryMetrics.total} test{summaryMetrics.total === 1 ? '' : 's'}</span>
+            <span>{summaryMetrics.certified} certified</span>
+            <span>{summaryMetrics.notCertified} not certified</span>
+            <span>{summaryMetrics.validationOnly} validation only</span>
+            <span style={{ color: summaryMetrics.criticals > 0 ? 'var(--color-danger)' : undefined }}>{summaryMetrics.criticals} critical finding{summaryMetrics.criticals === 1 ? '' : 's'}</span>
+          </span>
+        ) : undefined}
+      >
+        {loaded && !isLoading && totalTests === 0 ? (
+          <EmptyState
+            icon={Clock}
+            title={filtered ? 'No tests match these filters' : 'No tests yet'}
+            hint={filtered ? undefined : 'Run your first test and it appears here with its score and report.'}
+            action={filtered
+              ? <Button size="sm" onClick={clearFilters}>Clear filters</Button>
+              : <Button variant="primary" icon={Play} onClick={onStartNewTest}>Test an agent</Button>}
+          />
+        ) : (
+          <>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
                   <tr>
-                    <td colSpan={9} style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                      <RefreshCw size={18} className="spin-animation" style={{ margin: '0 auto 8px auto', display: 'block' }} />
-                      Loading test history...
-                    </td>
+                    <SortHeader label="Agent" column="agent_name" sort={sort} onSort={handleSort} />
+                    <SortHeader label="Result" column="status" sort={sort} onSort={handleSort} />
+                    <SortHeader label="Tested" column="created_at" sort={sort} onSort={handleSort} />
+                    <SortHeader label="Score" column="trust_score" sort={sort} onSort={handleSort} numeric />
+                    <th scope="col">Findings</th>
+                    <th scope="col"><span className="sr-only">Actions</span></th>
                   </tr>
-                ) : tests.length > 0 ? (
-                  tests.map((test) => {
-                    const isCertified = test.tier === 'CERTIFIED';
-                    const isConditional = test.tier === 'CONDITIONAL';
-                    const isDownloading = downloadingId === test.id;
-
+                </thead>
+                <tbody>
+                  {!loaded || (isLoading && tests.length === 0) ? <TableSkeleton columns={6} rows={8} /> : paginatedTests.map(test => {
+                    const score = test.trust_score !== undefined && test.trust_score !== null ? Math.round(test.trust_score) : 0;
+                    const { date, time } = formatDateTime(test.created_at);
                     return (
-                      <tr
-                        key={test.id}
-                        style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', transition: 'background 0.15s' }}
-                        className="table-row-hover"
-                      >
-                        <td style={{ padding: '12px 16px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                          {formatDate(test.created_at)}
-                        </td>
-                        <td style={{ padding: '12px 16px', fontWeight: '700', color: 'var(--text-primary)' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span>{test.agent_name}</span>
-                            <span style={{
-                              fontSize: '11px',
-                              padding: '1px 6px',
-                              borderRadius: '4px',
-                              background: test.is_latest ? 'rgba(0, 240, 255, 0.15)' : 'rgba(255,255,255,0.06)',
-                              color: test.is_latest ? '#00f0ff' : 'var(--text-muted)',
-                              fontWeight: '700'
-                            }}>
-                              {test.version || 'v1'}
-                            </span>
+                      <tr key={test.id}>
+                        <td style={{ minWidth: 240 }}>
+                          <div className="cell-with-icon">
+                            <Bot aria-hidden="true" />
+                            <div style={{ minWidth: 0 }}>
+                              <div className="cell-strong cell-truncate" title={test.agent_name}>{test.agent_name}</div>
+                              <div className="cell-sub" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                                {isSimulated(test.mode) ? <Badge tone="warning">{modeLabel(test.mode)}</Badge> : <span>{test.mode ? modeLabel(test.mode) : 'Audit'}</span>}
+                                <span aria-hidden="true">·</span>
+                                <span>{formatDuration(test.duration_ms)}</span>
+                                {test.audit_id && <><span aria-hidden="true">·</span><span className="cell-mono">{test.audit_id}</span></>}
+                              </div>
+                            </div>
                           </div>
                         </td>
-                        <td style={{ padding: '12px 16px' }}>
-                          <span style={{
-                            fontSize: '11px',
-                            textTransform: 'uppercase',
-                            fontWeight: '700',
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                            background: test.mode === 'certify' ? 'rgba(46,204,113,0.1)' : 'rgba(0,180,216,0.1)',
-                            color: test.mode === 'certify' ? '#2ecc71' : 'var(--accent-cyan)'
-                          }}>
-                            {test.mode}
-                          </span>
+                        <td><TierBadge tier={test.tier} /></td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <div>{date}</div>
+                          <div className="cell-sub">{time}</div>
                         </td>
-                        <td style={{ padding: '12px 16px' }}>
-                          <span style={{
-                            fontWeight: '800',
-                            color: isCertified ? '#2ecc71' : isConditional ? '#f1c40f' : '#e74c3c'
-                          }}>
-                            {test.trust_score}%
-                          </span>
+                        <td className="num" style={{ fontWeight: 600, color: scoreColor(score) }}>{fmtScore(score)}%</td>
+                        <td>
+                          <FindingBadges counts={test} />
                         </td>
-                        <td style={{ padding: '12px 16px' }}>
-                          {test.score_delta !== undefined && test.score_delta !== 0 ? (
-                            <span style={{ color: test.score_delta > 0 ? '#2ecc71' : '#e74c3c', fontWeight: '700', fontSize: '11.5px' }}>
-                              {test.score_delta > 0 ? `+${test.score_delta}%` : `${test.score_delta}%`}
-                            </span>
-                          ) : (
-                            <span style={{ color: 'var(--text-muted)' }}>—</span>
-                          )}
-                        </td>
-                        <td style={{ padding: '12px 16px' }}>
-                          <span className={`status-pill ${test.tier?.toLowerCase()}`} style={{ fontSize: '11px' }}>
-                            {test.tier}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px 16px', color: test.critical_count > 0 ? '#e74c3c' : 'var(--text-muted)', fontWeight: test.critical_count > 0 ? '700' : '400' }}>
-                          {test.critical_count}
-                        </td>
-                        <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
-                          {formatDuration(test.duration_ms)}
-                        </td>
-                        <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
-                            <button
-                              className="btn btn-ghost"
-                              onClick={() => handleOpenTestDetail(test.id)}
-                              style={{ padding: '4px 10px', fontSize: '12px', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '4px' }}
-                              title="View Full Test Findings"
-                            >
-                              <Eye size={13} />
-                              <span>View</span>
-                            </button>
-                            <button
-                              className="btn btn-ghost"
-                              onClick={() => handleDownloadPDF(test)}
-                              disabled={isDownloading}
-                              style={{ padding: '4px 8px', fontSize: '12px', opacity: isDownloading ? 0.6 : 1 }}
-                              title="Download Certified PDF Report"
-                            >
-                              {isDownloading ? (
-                                <RefreshCw size={13} className="spin-animation" />
-                              ) : (
-                                <Download size={13} />
-                              )}
-                            </button>
+                        <td className="cell-actions">
+                          <div style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }}>
+                            <PdfHoverPreview testId={test.id}>
+                              <Button size="sm" variant="ghost" icon={Eye} onClick={() => handleOpenTestDetail(test.id)} aria-label={`View result for ${test.agent_name}`}>View</Button>
+                            </PdfHoverPreview>
+                            <ReportDownloadMenu size="sm" variant="ghost" iconOnly name={test.agent_name}
+                              onPdf={() => handleDownloadPDF(test)} getReport={() => fetchTestResult(test.id)} onError={setError} />
+                            <Tooltip label="Delete test">
+                              <Button size="sm" variant="ghost" iconOnly icon={Trash2} className="btn-delete" onClick={() => setDeleting(test)} aria-label={`Delete test of ${test.agent_name}`} />
+                            </Tooltip>
                           </div>
                         </td>
                       </tr>
                     );
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={9} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                      No test records found matching your filters.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {totalTests > PAGE_SIZE && <Pagination page={validCurrentPage} pageSize={PAGE_SIZE} total={totalTests} onPage={setCurrentPage} />}
+          </>
+        )}
+      </Panel>
 
-      {/* Test Detail Modal */}
       {(selectedTestDetail || isDetailLoading) && (
-        <div style={{
-          position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.75)',
-          backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px'
-        }} onClick={() => setSelectedTestDetail(null)}>
-          <div
-            className="glass-card animate-slideup"
-            style={{ width: '820px', maxHeight: '90vh', overflowY: 'auto', padding: '28px', display: 'flex', flexDirection: 'column', gap: '20px' }}
-            onClick={e => e.stopPropagation()}
-          >
-            {isDetailLoading && !selectedTestDetail ? (
-              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                <RefreshCw size={24} className="spin-animation" style={{ margin: '0 auto 12px auto', display: 'block' }} />
-                <span>Loading complete test audit trail...</span>
-              </div>
-            ) : selectedTestDetail && (
-              <>
-                {/* Modal Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '16px' }}>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <h2 style={{ fontSize: '20px', fontWeight: '800', color: 'var(--text-primary)', margin: 0 }}>
-                        {selectedTestDetail.agent_name}
-                      </h2>
-                      <span style={{
-                        fontSize: '11px',
-                        fontWeight: '700',
-                        padding: '2px 8px',
-                        borderRadius: '10px',
-                        background: 'rgba(0, 240, 255, 0.15)',
-                        color: '#00f0ff'
-                      }}>
-                        {selectedTestDetail.version || 'v1'}
-                      </span>
-                      <span className={`status-pill ${selectedTestDetail.tier?.toLowerCase()}`} style={{ fontSize: '11px', fontWeight: '700', padding: '2px 8px' }}>
-                        {selectedTestDetail.tier}
-                      </span>
-                    </div>
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                      Audit ID: {selectedTestDetail.audit_id} • Conducted by {user?.name || 'Ismeet'} • {formatDate(selectedTestDetail.created_at)}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => setSelectedTestDetail(null)}
-                    style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-
-                {/* Score & Metrics Row */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
-                  <div className="glass-card stat-card" style={{ padding: '14px', textAlign: 'center' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Trust Score</span>
-                    <div style={{ fontSize: '22px', fontWeight: '800', color: selectedTestDetail.tier === 'CERTIFIED' ? '#2ecc71' : selectedTestDetail.tier === 'CONDITIONAL' ? '#f1c40f' : '#e74c3c' }}>
-                      {selectedTestDetail.trust_score}%
-                    </div>
-                  </div>
-                  <div className="glass-card stat-card" style={{ padding: '14px', textAlign: 'center' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Criticals</span>
-                    <div style={{ fontSize: '22px', fontWeight: '800', color: '#e74c3c' }}>
-                      {selectedTestDetail.critical_count || 0}
-                    </div>
-                  </div>
-                  <div className="glass-card stat-card" style={{ padding: '14px', textAlign: 'center' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Warnings</span>
-                    <div style={{ fontSize: '22px', fontWeight: '800', color: '#f1c40f' }}>
-                      {selectedTestDetail.warning_count || 0}
-                    </div>
-                  </div>
-                  <div className="glass-card stat-card" style={{ padding: '14px', textAlign: 'center' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Passed Rules</span>
-                    <div style={{ fontSize: '22px', fontWeight: '800', color: '#2ecc71' }}>
-                      {selectedTestDetail.pass_count || 0}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Findings Breakdown */}
-                <div>
-                  <h4 style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-primary)', margin: '0 0 10px 0' }}>
-                    Rule Evaluation Findings ({selectedTestDetail.findings?.length || 0})
-                  </h4>
-                  {selectedTestDetail.findings && selectedTestDetail.findings.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '300px', overflowY: 'auto' }}>
-                      {selectedTestDetail.findings.map((f: any, idx: number) => {
-                        const sev = f.severity?.toUpperCase();
-                        const isPass = sev === 'PASS';
-                        const isCrit = sev === 'CRITICAL';
-                        return (
-                          <div key={idx} style={{
-                            padding: '10px 14px', borderRadius: '6px',
-                            background: isPass ? 'rgba(46,204,113,0.06)' : isCrit ? 'rgba(231,76,60,0.08)' : 'rgba(241,196,15,0.06)',
-                            border: `1px solid ${isPass ? 'rgba(46,204,113,0.2)' : isCrit ? 'rgba(231,76,60,0.25)' : 'rgba(241,196,15,0.2)'}`,
-                            display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-                          }}>
-                            <div>
-                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' }}>{f.rule_id || f.id || `RULE-${idx+1}`}</span>
-                              <div style={{ fontSize: '12.5px', color: 'var(--text-primary)', fontWeight: '600' }}>{f.description || f.name || 'Safety constraint verification'}</div>
-                            </div>
-                            <span style={{
-                              fontSize: '10.5px', fontWeight: '700', padding: '2px 8px', borderRadius: '4px',
-                              background: isPass ? '#2ecc71' : isCrit ? '#e74c3c' : '#f1c40f', color: '#0f172a'
-                            }}>
-                              {sev || 'PASS'}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-                      No granular diagnostic findings recorded.
-                    </div>
-                  )}
-                </div>
-
-                {/* Modal Footer Actions */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
-                  <button className="btn btn-secondary" onClick={() => setSelectedTestDetail(null)}>
-                    Close
-                  </button>
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => handleDownloadPDF(selectedTestDetail)}
-                    style={{ gap: '6px' }}
-                  >
-                    <Download size={14} />
-                    <span>Download PDF Certificate</span>
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <ResultModal
+          test={selectedTestDetail}
+          loading={isDetailLoading && !selectedTestDetail}
+          user={user}
+          downloading={selectedTestDetail ? downloadingId === selectedTestDetail.id : false}
+          onClose={() => setSelectedTestDetail(null)}
+          onPdf={() => handleDownloadPDF(selectedTestDetail)}
+        />
       )}
 
+      <DeleteTestDialog
+        test={deleting}
+        onClose={() => setDeleting(null)}
+        onDeleted={t => {
+          setTests(prev => prev.filter(x => x.id !== t.id));
+          if (selectedTestDetail?.id === t.id) setSelectedTestDetail(null);
+        }}
+      />
     </div>
+  );
+};
+
+/** Full result of one test: score, verdict, counts and every finding with its evidence and fix. */
+const ResultModal: React.FC<{
+  test: any | null;
+  loading: boolean;
+  user: UserTestHistoryProps['user'];
+  downloading: boolean;
+  onClose: () => void;
+  onPdf: () => void;
+}> = ({ test, loading, user, downloading, onClose, onPdf }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const [filter, setFilter] = useState<FindingFilter>('ALL');
+  const [expanded, setExpanded] = useState<number | null>(null);
+  useFocusTrap(ref, true);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const findings: any[] = test?.findings || [];
+  const count = (sev: string) => findings.filter(f => (f.severity || 'PASS').toUpperCase() === sev).length;
+  const shown = findings.filter(f => filter === 'ALL' || (f.severity || 'PASS').toUpperCase() === filter);
+  const total = test ? (test.critical_count || 0) + (test.warning_count || 0) + (test.pass_count || 0) : 0;
+  const tester = test ? (test.tested_by_name || user?.name) : '';
+
+  return createPortal(
+    <div className="modal-layer" style={{ paddingTop: '4vh' }} onPointerDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={ref} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={loading} style={{ maxWidth: 920, maxHeight: '92vh' }}>
+        {loading || !test ? (
+          <div style={{ padding: 32 }} role="status" aria-label="Loading result">
+            <h2 id={titleId} className="sr-only">Loading result</h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <span className="skeleton" style={{ height: 28, width: '50%' }} />
+              <span className="skeleton" style={{ height: 96 }} />
+              <span className="skeleton" style={{ height: 200 }} />
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="modal-head" style={{ borderBottom: '1px solid var(--color-border)', paddingBottom: 16 }}>
+              <div style={{ minWidth: 0 }}>
+                <h2 id={titleId} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {test.agent_name}
+                  <TierBadge tier={test.tier || 'NOT_CERTIFIED'} />
+                </h2>
+                <p>
+                  Completed in {test.duration_ms ? `${(test.duration_ms / 1000).toFixed(1)}s` : '-'}
+                  {tester ? `, tested by ${tester}` : ''}
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <ReportDownloadMenu name={test.agent_name} onPdf={onPdf} getReport={() => fetchTestResult(test.id)} />
+                <button className="icon-btn" onClick={onClose} aria-label="Close"><X /></button>
+              </div>
+            </div>
+
+            <div className="modal-body" style={{ paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 24 }}>
+              <SimulatedNotice mode={test.mode} />
+
+              <div className="result-summary">
+                <div className="result-score">
+                  <span className="stat-label">Trust score</span>
+                  <span className="result-score-value" style={{ color: scoreColor(test.trust_score) }}>{fmtScore(test.trust_score)}%</span>
+                  <div className="meter" style={{ width: '100%' }}>
+                    <span style={{ width: `${Math.max(0, Math.min(100, test.trust_score || 0))}%`, background: scoreColor(test.trust_score) }} />
+                  </div>
+                  <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{verdict(test)}</span>
+                </div>
+                <div className="result-counts">
+                  {([
+                    ['Critical', test.critical_count || 0, (test.critical_count || 0) > 0 ? 'var(--color-danger)' : undefined],
+                    ['Warnings', test.warning_count || 0, (test.warning_count || 0) > 0 ? 'var(--color-warning)' : undefined],
+                    ['Passed', test.pass_count || 0, undefined],
+                    ['Total checks', total, undefined],
+                  ] as [string, number, string | undefined][]).map(([label, value, color]) => (
+                    <div key={label} className="result-count">
+                      <span>{label}</span>
+                      <strong className="num" style={{ color }}>{value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <dl className="detail-list">
+                <div className="detail-row"><dt>Audit ID</dt><dd><code>{test.audit_id || '-'}</code></dd></div>
+                <div className="detail-row"><dt>Mode</dt><dd>{modeLabel(test.mode)}</dd></div>
+                <div className="detail-row"><dt>Run time</dt><dd>{test.duration_ms ? `${(test.duration_ms / 1000).toFixed(2)}s` : '-'}</dd></div>
+              </dl>
+
+              <section>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 12 }}>
+                  <div>
+                    <h3 style={{ fontSize: 16 }}>Findings <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>({shown.length})</span></h3>
+                    <p style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 2 }}>Open a finding to see what was expected, what happened and how to fix it.</p>
+                  </div>
+                  <Segmented<FindingFilter> label="Filter findings" value={filter} onChange={v => { setFilter(v); setExpanded(null); }} items={[
+                    { value: 'ALL', label: 'All' },
+                    { value: 'CRITICAL', label: `Critical (${count('CRITICAL')})` },
+                    { value: 'WARNING', label: `Warning (${count('WARNING')})` },
+                    { value: 'PASS', label: `Pass (${count('PASS')})` },
+                  ]} />
+                </div>
+                {shown.length === 0 ? (
+                  <EmptyState title={findings.length === 0 ? 'No findings were stored for this test' : 'No findings in this category'} />
+                ) : (
+                  <div className="accordion">
+                    {shown.map((f, idx) => {
+                      const sev = (f.severity || 'PASS').toUpperCase();
+                      const isOpen = expanded === idx;
+                      return (
+                        <div key={idx} className="accordion-item">
+                          <button className="accordion-trigger" onClick={() => setExpanded(isOpen ? null : idx)} aria-expanded={isOpen}>
+                            {isOpen ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
+                            <Badge tone={sevTone(sev)}>{sev.charAt(0) + sev.slice(1).toLowerCase()}</Badge>
+                            <span className="accordion-title cell-truncate" style={{ maxWidth: 'none' }}>{f.title || f.description || 'Compliance check'}</span>
+                            <span className="accordion-meta cell-mono">{f.rule_id || f.id || f.check_id || `RULE-${idx + 1}`}</span>
+                          </button>
+                          {isOpen && (
+                            <div className="accordion-panel">
+                              {f.description && <p>{f.description}</p>}
+                              {f.expected && <p><strong>Expected: </strong>{f.expected}</p>}
+                              {f.actual && <p><strong>Observed: </strong>{f.actual}</p>}
+                              {f.remediation && <p><strong>How to fix: </strong>{f.remediation}</p>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </div>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
   );
 };

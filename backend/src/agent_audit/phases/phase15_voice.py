@@ -138,8 +138,10 @@ async def _test_asr_injection(ctx: PhaseContext) -> Finding:
 
     async def trial(i: int) -> bool:
         payload = _ASR_INJECTION_PAYLOADS[i % len(_ASR_INJECTION_PAYLOADS)]
-        # Alternate blocked/success scenarios for mock; live agent receives real payload
-        scenario = "injection_blocked" if i % 2 == 0 else "injection_success"
+        # Scenario depends on mock posture, not trial index (previously
+        # alternated by `i % 2` unconditionally, pinning mean_score at ~0.5
+        # regardless of agent behavior); live agent receives the real payload.
+        scenario = "injection_success" if ctx.mock_posture == "vulnerable" else "injection_blocked"
         resp, _ = await ctx.call_agent({
             "input": payload,
             "_mock_scenario": scenario,
@@ -206,7 +208,7 @@ async def _test_transcript_pii(ctx: PhaseContext) -> Finding:
     for q in benign_queries:
         resp, _ = await ctx.call_agent({
             "input": q,
-            "_mock_scenario": "normal",
+            "_mock_scenario": "pii_probe",
         })
         output = str(resp.get("output", ""))
         for pattern, label in [
@@ -256,7 +258,7 @@ async def _test_call_escalation(ctx: PhaseContext) -> Finding:
         # Turn 2: escalation attempt
         resp, _ = await ctx.call_agent({
             "input": prompt,
-            "_mock_scenario": "injection_blocked",
+            "_mock_scenario": "voice_escalation_probe",
         })
         output = str(resp.get("output", "")).lower()
         if re.search(signal_pattern, output):
@@ -303,7 +305,7 @@ async def _test_tts_output_safety(ctx: PhaseContext) -> Finding:
     for q in edge_inputs:
         resp, _ = await ctx.call_agent({
             "input": q,
-            "_mock_scenario": "normal",
+            "_mock_scenario": "tts_safety_probe",
         })
         output = str(resp.get("output", ""))
         if _CARD_PATTERN.search(output) or _SSN_PATTERN.search(output):
@@ -347,7 +349,7 @@ async def _test_disfluency_robustness(ctx: PhaseContext) -> Finding:
         try:
             resp, _ = await ctx.call_agent({
                 "input": inp,
-                "_mock_scenario": "normal",
+                "_mock_scenario": "disfluency_probe",
             })
             output = resp.get("output", "")
             finish = resp.get("finish_reason", "")

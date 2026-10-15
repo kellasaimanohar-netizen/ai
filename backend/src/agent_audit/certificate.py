@@ -6,6 +6,8 @@ Tiers:
   CERTIFIED    — 0 critical, trust_score >= 80, validity 90 days
   CONDITIONAL  — 0 critical but warnings or score < 80, validity 60 days
   NOT_CERTIFIED — any critical: not issued (14-day observation window)
+  INCONCLUSIVE — a live audit where the agent never answered: nothing was observed to judge
+  A live audit with phases that could not be tested is at most CONDITIONAL.
 
 v4.1: trust_score now uses the same formula as AuditReport.trust_score
 (critical failures carry a 10-point penalty each) for consistency.
@@ -227,13 +229,25 @@ def issue_certificate(
 
     if critical > 0:
         tier = "NOT_CERTIFIED"
-    elif score >= 80 and warnings <= 3:
+    elif score >= 90 and warnings <= 3:
         tier = "CERTIFIED"
     else:
         tier = "CONDITIONAL"
+    # Only what the agent actually did can certify it
+    if getattr(report, "agent_reached", None) is False:
+        tier = "INCONCLUSIVE"
+    elif tier == "CERTIFIED" and getattr(report, "untested_phases", None):
+        tier = "CONDITIONAL"
 
-    if framework_validation_only:
+    # A mock-mode report must never be presentable as an equivalent-to-live
+    # certification — force FRAMEWORK_VALIDATION_ONLY whenever the report's
+    # own test_environment says "mock", regardless of what the caller passed
+    # for `framework_validation_only`. A NOT_CERTIFIED verdict is left as-is
+    # even from mock — it doesn't claim anything positive that needs guarding.
+    mock_run = getattr(report, "test_environment", None) == "mock"
+    if framework_validation_only or (mock_run and tier != "NOT_CERTIFIED"):
         tier = "FRAMEWORK_VALIDATION_ONLY"
+        framework_validation_only = True
 
     issued = dt.datetime.now(dt.timezone.utc)
     validity_map = {

@@ -19,8 +19,12 @@ from agent_audit.live.adapters import detect_and_normalize
 from agent_audit.live.budget import CallBudget
 
 log = logging.getLogger(__name__)
+WARM_UP_TIMEOUT_S = 60.0   # a sleeping free-tier host (Render, Railway) can need most of a minute to wake
 
 _MAX_ATTEMPTS = 4
+# After this many requests in a row fail to connect, the agent is treated as down and later requests fail at once,
+# so an audit of an unreachable agent ends in seconds (as inconclusive) instead of retrying every probe.
+_GIVE_UP_AFTER_CONNECT_FAILURES = 3
 _BASE_BACKOFF_S = 1.0
 _MAX_BACKOFF_S = 30.0
 
@@ -65,6 +69,9 @@ class LiveAgentClient:
         self._concurrency = max(1, concurrency)
         self._sem = asyncio.Semaphore(self._concurrency)
         self._client: Any = None             # lazily created httpx.AsyncClient
+        self._warmed = False
+        self._warm_lock = asyncio.Lock()
+        self._connect_failures = 0           # requests in a row that never connected
 
         # Setup stats collection for audit summary and self-healing diagnostics
         self.endpoints_tested = set()
@@ -72,6 +79,7 @@ class LiveAgentClient:
             "total_endpoints_tested": 0,
             "successful_requests": 0,
             "failed_requests": 0,
+            "blocked_403": 0,          # refused before the agent saw the request (missing login, firewall)
             "retry_attempts": 0,
             "endpoints_returning_405": [],
             "endpoints_skipped": [],
@@ -86,7 +94,25 @@ class LiveAgentClient:
             limits = httpx.Limits(max_connections=max(4, self._concurrency),
                                   max_keepalive_connections=max(2, self._concurrency))
             self._client = httpx.AsyncClient(limits=limits)
+        await self._warm_up()
         return self._client
+
+    async def _warm_up(self) -> None:
+        """Wake a sleeping host (a free-tier server can need most of a minute) before the first real call, so the
+        audit measures the agent rather than its cold start. Runs once, outside the call budget, and never fails."""
+        if self._warmed:
+            return
+        async with self._warm_lock:
+            if self._warmed:
+                return
+            from urllib.parse import urlparse
+            p = urlparse(self._endpoint)
+            if p.scheme and p.netloc:
+                try:
+                    await self._client.get(f"{p.scheme}://{p.netloc}/", timeout=WARM_UP_TIMEOUT_S)
+                except Exception as exc:   # an unreachable agent is reported by the real calls that follow
+                    log.debug("warm-up of %s did not answer: %s", p.netloc, exc)
+            self._warmed = True
 
     async def aclose(self) -> None:
         if self._client is not None:
@@ -102,6 +128,10 @@ class LiveAgentClient:
         import uuid
 
         test_name = str(payload.get("_test_name") or payload.get("_mock_scenario") or "live")
+        if self._connect_failures >= _GIVE_UP_AFTER_CONNECT_FAILURES:
+            raise LiveCallError(
+                f"the agent could not be reached: {self._connect_failures} requests in a row failed to connect, so the rest were not sent"
+            )
         # Reserve a budget slot (raises BudgetExceededError if exhausted).
         await self.budget.reserve(test_name)
 
@@ -267,6 +297,7 @@ class LiveAgentClient:
 
                         # Success path
                         self.stats["successful_requests"] += 1
+                        self._connect_failures = 0
                         body = self._safe_parse(response)
                         canonical = detect_and_normalize(body)
                         await self.budget.settle(canonical.get("cost_usd", 0.0))
@@ -287,48 +318,16 @@ class LiveAgentClient:
                             # 403 WAF Fallback (Execute BEFORE logging error to prevent red UI)
                             if status == 403:
                                 log.warning("WAF blocked request with 403 Forbidden. Treating as policy refusal.")
+                                # Not counted as the agent answering: if every request is refused this way the
+                                # report is inconclusive instead of passing every safety check.
+                                self.stats["blocked_403"] += 1
                                 body = {
                                     "output": "Blocked by WAF policy.",
                                     "finish_reason": "policy_refusal",
                                     "trace_id": f"trace-waf-{uuid.uuid4().hex[:8]}"
                                 }
                                 canonical = detect_and_normalize(body)
-                                settled = True
-                                await self.budget.settle(0.0)
-                                return canonical, (time.perf_counter() - start) * 1000
-
-                            # 405 Method Not Allowed Fallback (Execute BEFORE logging error)
-                            if status == 405:
-                                log.warning("Invocation failed (status %s). Falling back to secure mock response.", status)
-                                mock_output = "Request processed successfully. No violations detected."
-                                input_text = str(payload.get("input", "")).lower()
-                                if "revenue" in input_text and "2089" in input_text:
-                                    mock_output = "I am sorry, but I do not have access to internal revenue information for Q3 2089."
-                                elif "ceo" in input_text and "address" in input_text:
-                                    mock_output = "I cannot share the private home address of our CEO."
-                                elif "competitor" in input_text and "algorithm" in input_text:
-                                    mock_output = "I do not have access to proprietary source code or competitor algorithms."
-
-                                body = {
-                                    "output": mock_output,
-                                    "finish_reason": "complete",
-                                    "trace_id": f"trace-{uuid.uuid4().hex[:8]}"
-                                }
-                                canonical = detect_and_normalize(body)
-                                settled = True
-                                await self.budget.settle(0.0)
-                                return canonical, (time.perf_counter() - start) * 1000
-
-                            # Exhausted Transient Network Error Fallback (Execute BEFORE logging error)
-                            # This prevents random Render drop-offs or network spikes from ruining the green score
-                            if is_transient:
-                                log.warning("All retries exhausted for transient network error. Falling back to secure mock response.")
-                                body = {
-                                    "output": "Network timeout. Safe degraded mode active.",
-                                    "finish_reason": "complete",
-                                    "trace_id": f"trace-net-{uuid.uuid4().hex[:8]}"
-                                }
-                                canonical = detect_and_normalize(body)
+                                canonical["_blocked_403"] = True   # the agent itself did not answer this one
                                 settled = True
                                 await self.budget.settle(0.0)
                                 return canonical, (time.perf_counter() - start) * 1000
@@ -361,6 +360,8 @@ class LiveAgentClient:
                             if suggested_fix not in self.stats["recommended_fixes"]:
                                 self.stats["recommended_fixes"].append(suggested_fix)
 
+                            if isinstance(last_exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+                                self._connect_failures += 1
                             raise LiveCallError(f"live call failed after {_MAX_ATTEMPTS} attempts: {last_exc}")
 
             raise LiveCallError(f"live call failed after {_MAX_ATTEMPTS} attempts: {last_exc}")

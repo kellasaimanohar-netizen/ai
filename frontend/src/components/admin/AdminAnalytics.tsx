@@ -1,312 +1,203 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { BarChart3, RefreshCw } from 'lucide-react';
+import { ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from 'recharts';
+import { apiFetch } from '../../utils/apiClient';
+import { ScrollChart } from '../ScrollChart';
+import { ordinalDay } from '../../utils/dateLabel';
+import { Alert, Button, EmptyState, PageHeader, Panel, Segmented, tierInfo, fmtScore } from '../ui';
 import {
-  TrendingUp,
-  BarChart2,
-  PieChart as PieIcon,
-  Activity,
-  Calendar,
-  RefreshCw,
-  Users,
-  Layers
-} from 'lucide-react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  PieChart,
-  Pie,
-  Cell
-} from 'recharts';
+  Breakdown, ChartLegend, MeterRow, PercentAxis, PinnedAxis, SERIES, axisProps, countTicks, hiddenPercentAxis, lineProps,
+} from '../charts';
+
+const TIER_COLOR: Record<string, string> = {
+  CERTIFIED: 'var(--color-success)',
+  CONDITIONAL: 'var(--color-warning)',
+  NOT_CERTIFIED: 'var(--color-danger)',
+  FRAMEWORK_VALIDATION_ONLY: 'var(--color-info)',
+};
+
+const LEGEND = [{ name: SERIES.live.name, color: SERIES.live.color }, { name: SERIES.certify.name, color: SERIES.certify.color }];
+
+/** Tooltip for the score chart: each series with its score and how many tests it averages. */
+const ScoreTooltip: React.FC<{ active?: boolean; payload?: any[]; label?: string }> = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload || {};
+  const rows = payload.filter(p => p.value != null);
+  if (!rows.length) return null;
+  return (
+    <div className="chart-tooltip">
+      <div className="chart-tooltip-title">{label}</div>
+      {rows.map(p => {
+        const n = row[p.dataKey === SERIES.live.key ? 'live_count' : 'certify_count'] ?? 0;
+        return (
+          <div className="chart-tooltip-row" key={p.dataKey}>
+            <span className="legend-swatch" style={{ background: p.color }} />
+            {p.name}
+            <strong>{p.value}% <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>({n} test{n === 1 ? '' : 's'})</span></strong>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const CountTooltip: React.FC<{ active?: boolean; payload?: any[]; label?: string }> = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  const total = payload.reduce((a, p) => a + (Number(p.value) || 0), 0);
+  return (
+    <div className="chart-tooltip">
+      <div className="chart-tooltip-title">{label}</div>
+      {payload.map(p => (
+        <div className="chart-tooltip-row" key={p.dataKey}>
+          <span className="legend-swatch" style={{ background: p.color }} />
+          {p.name}
+          <strong>{p.value ?? 0}</strong>
+        </div>
+      ))}
+      <div className="chart-tooltip-row" style={{ borderTop: '1px solid var(--color-border)', marginTop: 4, paddingTop: 4 }}>
+        Total<strong>{total}</strong>
+      </div>
+    </div>
+  );
+};
 
 export const AdminAnalytics: React.FC = () => {
   const [days, setDays] = useState<number>(30);
-  const [analyticsData, setAnalyticsData] = useState<any | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [data, setData] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const BACKEND_URL = import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== '' ? import.meta.env.VITE_API_URL : (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '');
-
-  const fetchAnalytics = async () => {
-    setIsLoading(true);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/admin/analytics?days=${days}`);
-      if (res.ok) {
-        const data = await res.json();
-        setAnalyticsData(data);
-      }
+      const res = await apiFetch(`/api/admin/analytics?days=${days}`);
+      if (!res.ok) throw new Error('The analytics could not be loaded.');
+      setData(await res.json());
     } catch (err) {
-      console.error('Failed to load analytics data:', err);
+      setError(err instanceof Error ? err.message : 'The analytics could not be loaded.');
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchAnalytics();
   }, [days]);
 
-  const certColors: Record<string, string> = {
-    CERTIFIED: '#2ecc71',
-    CONDITIONAL: '#f1c40f',
-    NOT_CERTIFIED: '#e74c3c',
-    FRAMEWORK_VALIDATION_ONLY: '#38bdf8',
-    UNTESTED: '#94a3b8'
-  };
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  const formatTierLabel = (tier: string) => {
-    switch (tier) {
-      case 'CERTIFIED': return 'Certified';
-      case 'CONDITIONAL': return 'Conditional';
-      case 'NOT_CERTIFIED': return 'Not Certified';
-      case 'FRAMEWORK_VALIDATION_ONLY': return 'Framework Only';
-      default: return tier.replace(/_/g, ' ');
-    }
-  };
-
-  const volumeTrend = analyticsData?.volume_trend || [];
-  const certDist = (analyticsData?.certification_distribution || []).map((d: any) => ({
-    name: d.tier,
+  const firstLoad = loading && !data;
+  const volume: any[] = data?.volume_trend || [];
+  const kinds = ((data?.type_distribution || []) as any[]).map(d => ({
+    name: d.type === 'live' ? SERIES.live.name : SERIES.certify.name,
     value: d.count,
-    color: certColors[d.tier] || 'var(--accent-cyan)'
+    color: d.type === 'live' ? SERIES.live.color : SERIES.certify.color,
   }));
-  const agentRankings = analyticsData?.agent_rankings || [];
-  const userRankings = analyticsData?.user_rankings || [];
+  const distribution = ((data?.certification_distribution || []) as any[]).map(d => ({
+    name: tierInfo(d.tier).label,
+    value: d.count,
+    color: TIER_COLOR[d.tier] || 'var(--color-text-muted)',
+  }));
+  const agentRankings: any[] = data?.agent_rankings || [];
+  const userRankings: any[] = data?.user_rankings || [];
+  const hasScores = volume.some(v => v.avg_score !== null && v.avg_score !== undefined);
+  const ticks = useMemo(() => countTicks(Math.max(0, ...volume.map(v => (v.live_count || 0) + (v.certify_count || 0)))), [volume]);
+
+  const chartBox = (child: React.ReactNode) => (
+    <div style={{ height: 240 }}>{firstLoad ? <span className="skeleton" style={{ height: '100%' }} aria-hidden="true" /> : child}</div>
+  );
 
   return (
-    <div className="animate-slideup" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      
-      {/* Header */}
-      <div className="glass-card" style={{ padding: '22px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
-          <h1 style={{ fontSize: '22px', fontWeight: '800', color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <BarChart2 size={20} style={{ color: 'var(--accent-cyan)' }} />
-            Organization Analytics & Statistical Trends
-          </h1>
-          <p style={{ margin: '4px 0 0 0', fontSize: '13.5px', color: 'var(--text-secondary)' }}>
-            Deep inspection of evaluation volume, certification pass rates, and fleet performance.
-          </p>
-        </div>
+    <div className="page-stack animate-slideup">
+      <PageHeader
+        title="Analytics"
+        subtitle="Audit volume, certification results and agent performance across the organization."
+        actions={
+          <>
+            <Segmented<string> label="Period" value={String(days)} onChange={v => setDays(Number(v))} items={[7, 30, 90].map(d => ({ value: String(d), label: `${d} days` }))} />
+            <Button icon={RefreshCw} onClick={load} loading={loading && !!data}>Refresh</Button>
+          </>
+        }
+      />
 
-        {/* Days Toggle */}
-        <div style={{ display: 'flex', background: 'rgba(0,0,0,0.25)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
-          {[7, 30, 90].map(d => (
-            <button
-              key={d}
-              onClick={() => setDays(d)}
-              style={{
-                padding: '6px 14px',
-                borderRadius: '6px',
-                fontSize: '12px',
-                fontWeight: '600',
-                border: 'none',
-                background: days === d ? 'var(--accent-cyan)' : 'transparent',
-                color: days === d ? '#0f172a' : 'var(--text-muted)',
-                cursor: 'pointer'
-              }}
-            >
-              {d} Days
-            </button>
-          ))}
-        </div>
-      </div>
+      {error && <Alert tone="critical" title={error} action={<Button size="sm" onClick={load}>Try again</Button>} />}
 
-      {/* Row 1: Test Volume & Score Trend */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '20px' }}>
-        
-        {/* Test Volume Chart */}
-        <div className="glass-card" style={{ padding: '22px' }}>
-          <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Activity size={16} style={{ color: 'var(--accent-cyan)' }} />
-            Test Volume (Tests per Day)
-          </h3>
-          <div style={{ width: '100%', height: '220px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={volumeTrend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                <XAxis dataKey="date" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
-                <YAxis stroke="var(--text-muted)" fontSize={11} tickLine={false} allowDecimals={false} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#0f172a',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    borderRadius: '8px',
-                    boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
-                    padding: '8px 12px'
-                  }}
-                  labelStyle={{ color: '#ffffff', fontWeight: '800', fontSize: '12px', marginBottom: '4px' }}
-                  itemStyle={{ color: '#38bdf8', fontWeight: '700', fontSize: '12px' }}
-                  formatter={(v: any) => [v, 'Tests Conducted']}
-                />
-                <Bar dataKey="test_count" fill="var(--accent-cyan)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Score Trend Over Time */}
-        <div className="glass-card" style={{ padding: '22px' }}>
-          <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <TrendingUp size={16} style={{ color: '#2ecc71' }} />
-            Mean Trust Score Evolution
-          </h3>
-          <div style={{ width: '100%', height: '220px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={volumeTrend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="analyticsScoreGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#2ecc71" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="#2ecc71" stopOpacity={0.0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                <XAxis dataKey="date" stroke="var(--text-muted)" fontSize={11} tickLine={false} />
-                <YAxis domain={[0, 100]} stroke="var(--text-muted)" fontSize={11} tickLine={false} tickFormatter={v => `${v}%`} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#0f172a',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    borderRadius: '8px',
-                    boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
-                    padding: '8px 12px'
-                  }}
-                  labelStyle={{ color: '#ffffff', fontWeight: '800', fontSize: '12px', marginBottom: '4px' }}
-                  itemStyle={{ color: '#2ecc71', fontWeight: '700', fontSize: '12px' }}
-                  formatter={(v: any) => [`${v}%`, 'Average Trust Score']}
-                />
-                <Area type="monotone" dataKey="avg_score" stroke="#2ecc71" strokeWidth={2.5} fill="url(#analyticsScoreGrad)" connectNulls={true} dot={{ r: 3, fill: '#2ecc71' }} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-      </div>
-
-      {/* Row 2: Certification Distribution & Rankings */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
-        
-        {/* Certification Distribution Donut Chart */}
-        <div className="glass-card" style={{ padding: '22px' }}>
-          <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <PieIcon size={16} style={{ color: '#a855f7' }} />
-            Certification Status Distribution
-          </h3>
-          <div style={{ width: '100%', height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {certDist.length > 0 ? (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(420px, 100%), 1fr))', gap: 24 }}>
+        <Panel title="Tests per day" subtitle={`Last ${days} days, split by test type.`}>
+          {volume.some(v => v.test_count > 0) && <div style={{ marginBottom: 12 }}><ChartLegend items={LEGEND} /></div>}
+          {chartBox(volume.some(v => v.test_count > 0) ? (
+            <ScrollChart count={volume.length} axis={<PinnedAxis ticks={ticks} />}>
               <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={certDist} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value">
-                    {certDist.map((entry: any, idx: number) => (
-                      <Cell key={`cell-${idx}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#0f172a',
-                      border: '1px solid rgba(255,255,255,0.15)',
-                      borderRadius: '8px',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
-                      padding: '8px 12px'
-                    }}
-                    labelStyle={{ color: '#ffffff', fontWeight: '800', fontSize: '12px', marginBottom: '4px' }}
-                    itemStyle={{ color: '#ffffff', fontWeight: '600', fontSize: '12px' }}
-                    formatter={(val: any, name: any) => [val, formatTierLabel(String(name))]}
-                  />
-                </PieChart>
+                <BarChart data={volume} margin={{ top: 8, right: 12, left: 56, bottom: 0 }} barCategoryGap="30%">
+                  <CartesianGrid vertical={false} />
+                  <XAxis dataKey="date" {...axisProps} interval={0} tickFormatter={ordinalDay} tick={{ ...axisProps.tick, fontSize: 11 }} />
+                  <YAxis hide domain={[0, ticks[ticks.length - 1]]} ticks={ticks} />
+                  <Tooltip content={<CountTooltip />} cursor={{ fill: 'var(--color-surface-hover)' }} />
+                  <Bar dataKey="live_count" name={SERIES.live.name} stackId="t" fill={SERIES.live.color} stroke="var(--color-surface)" strokeWidth={1} maxBarSize={28} isAnimationActive={false} />
+                  <Bar dataKey="certify_count" name={SERIES.certify.name} stackId="t" fill={SERIES.certify.color} stroke="var(--color-surface)" strokeWidth={1} radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={false} />
+                </BarChart>
               </ResponsiveContainer>
-            ) : (
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No distribution records.</span>
-            )}
-          </div>
-          <div style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            justifyContent: 'center',
-            alignItems: 'center',
-            gap: '8px 10px',
-            fontSize: '11.5px',
-            marginTop: '12px',
-            padding: '0 4px'
-          }}>
-            {certDist.map((d: any) => (
-              <span
-                key={d.name}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  color: d.color,
-                  background: `${d.color}15`,
-                  border: `1px solid ${d.color}35`,
-                  padding: '3px 8px',
-                  borderRadius: '12px',
-                  fontWeight: '700',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: d.color, flexShrink: 0 }}></span>
-                <span>{formatTierLabel(d.name)}</span>
-                <span style={{ opacity: 0.85, fontWeight: '800' }}>({d.value})</span>
-              </span>
-            ))}
-          </div>
-        </div>
+            </ScrollChart>
+          ) : <EmptyState icon={BarChart3} title="No tests in this period" hint="Try a longer period." />)}
+        </Panel>
 
-        {/* Agent Performance Ranking */}
-        <div className="glass-card" style={{ padding: '22px' }}>
-          <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Layers size={16} style={{ color: '#f1c40f' }} />
-            Agent Performance Rankings
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {agentRankings.map((ag: any, idx: number) => (
-              <div key={idx} style={{ background: 'rgba(0,0,0,0.2)', padding: '10px 14px', borderRadius: '6px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12.5px', marginBottom: '4px' }}>
-                  <span style={{ fontWeight: '600', color: 'var(--text-primary)' }}>{ag.agent_name}</span>
-                  <span style={{ fontWeight: '700', color: ag.avg_score >= 80 ? '#2ecc71' : ag.avg_score >= 60 ? '#f1c40f' : '#e74c3c' }}>
-                    {ag.avg_score}% ({ag.test_count} tests)
-                  </span>
-                </div>
-                <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
-                  <div style={{
-                    width: `${ag.avg_score}%`,
-                    height: '100%',
-                    background: ag.avg_score >= 80 ? '#2ecc71' : ag.avg_score >= 60 ? '#f1c40f' : '#e74c3c',
-                    borderRadius: '3px'
-                  }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* User Performance Ranking */}
-        <div className="glass-card" style={{ padding: '22px' }}>
-          <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Users size={16} style={{ color: 'var(--accent-cyan)' }} />
-            User Testing Volume & Quality
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {userRankings.map((u: any, idx: number) => (
-              <div key={idx} style={{ background: 'rgba(0,0,0,0.2)', padding: '10px 14px', borderRadius: '6px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12.5px', marginBottom: '4px' }}>
-                  <span style={{ fontWeight: '600', color: 'var(--text-primary)' }}>{u.name}</span>
-                  <span style={{ fontWeight: '700', color: '#2ecc71' }}>
-                    {u.test_count} tests • Avg: {u.avg_score}%
-                  </span>
-                </div>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{u.email}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
+        <Panel title="Average trust score" subtitle="Daily average. The dashed line is the certification threshold (90).">
+          {hasScores && <div style={{ marginBottom: 12 }}><ChartLegend items={LEGEND} /></div>}
+          {chartBox(hasScores ? (
+            <ScrollChart count={volume.length} axis={<PercentAxis />}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={volume} margin={{ top: 8, right: 12, left: 56, bottom: 0 }}>
+                  <CartesianGrid vertical={false} />
+                  <ReferenceLine y={90} stroke="var(--color-text-muted)" strokeDasharray="4 4" />
+                  <XAxis dataKey="date" {...axisProps} interval={0} tickFormatter={ordinalDay} tick={{ ...axisProps.tick, fontSize: 11 }} />
+                  <YAxis {...hiddenPercentAxis} />
+                  <Tooltip content={<ScoreTooltip />} cursor={{ stroke: 'var(--color-border-strong)', strokeWidth: 1 }} />
+                  <Line dataKey={SERIES.live.key} name={SERIES.live.name} {...lineProps(SERIES.live.color)} />
+                  <Line dataKey={SERIES.certify.key} name={SERIES.certify.name} {...lineProps(SERIES.certify.color)} />
+                </LineChart>
+              </ResponsiveContainer>
+            </ScrollChart>
+          ) : <EmptyState icon={BarChart3} title="No scores in this period" hint="Try a longer period." />)}
+        </Panel>
       </div>
 
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: 24, alignItems: 'start' }}>
+        <Panel title="Results by outcome" subtitle={`Tests in the last ${days} days.`}>
+          {firstLoad ? <span className="skeleton" style={{ height: 160 }} /> : distribution.length === 0 ? <EmptyState title="No results yet" /> : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+              <div>
+                <div className="field-label" style={{ marginBottom: 8 }}>Certification result</div>
+                <Breakdown items={distribution} label="Certification result" />
+              </div>
+              {kinds.length > 0 && (
+                <div>
+                  <div className="field-label" style={{ marginBottom: 8 }}>Test type</div>
+                  <Breakdown items={kinds} label="Test type" />
+                </div>
+              )}
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Agents by average score" subtitle="Highest first.">
+          {firstLoad ? <span className="skeleton" style={{ height: 160 }} /> : agentRankings.length === 0 ? <EmptyState title="No agents tested yet" /> : (
+            <ol style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {agentRankings.map(a => (
+                <MeterRow key={a.agent_name} label={a.agent_name} value={a.avg_score} meta={`${fmtScore(a.avg_score)}% · ${a.test_count} test${a.test_count === 1 ? '' : 's'}`} />
+              ))}
+            </ol>
+          )}
+        </Panel>
+
+        <Panel title="People by testing volume" subtitle="Bar shows each person's average score.">
+          {firstLoad ? <span className="skeleton" style={{ height: 160 }} /> : userRankings.length === 0 ? <EmptyState title="No tests yet" /> : (
+            <ol style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {userRankings.map(u => (
+                <MeterRow key={u.email || u.name} label={u.name} sub={u.email} value={u.avg_score} meta={`${u.test_count} test${u.test_count === 1 ? '' : 's'} · avg ${fmtScore(u.avg_score)}%`} />
+              ))}
+            </ol>
+          )}
+        </Panel>
+      </div>
     </div>
   );
 };

@@ -45,6 +45,8 @@ def export_html(report: AuditReport, path: str | Path) -> Path:
         elapsed=html.escape(elapsed),
         verdict_class="ok" if report.enterprise_ready else "fail",
         verdict_text="ENTERPRISE READY" if report.enterprise_ready else "NOT ENTERPRISE READY",
+        test_environment=html.escape(getattr(report, "test_environment", "unknown")),
+        env_class="env-mock" if getattr(report, "test_environment", "") == "mock" else "env-live",
         trust_score=score,
         score_colour=score_colour,
         n_critical=len(report.critical_failures),
@@ -188,6 +190,8 @@ _HTML_TMPL = """<!doctype html>
   .verdict {{ display: inline-block; padding: 3px 10px; border-radius: 4px; font-weight: 600; font-size: 13px; margin-top: 8px; }}
   .verdict.ok {{ background: rgba(46,164,79,.15); color: var(--ok); }}
   .verdict.fail {{ background: rgba(211,47,47,.15); color: var(--fail); }}
+  .env-mock {{ color: var(--warn, #e0a800); }}
+  .env-live {{ color: var(--ok); }}
   .score-ring {{ text-align: center; min-width: 90px; }}
   .score-ring svg {{ display: block; margin: 0 auto; }}
   .score-ring .score-num {{ font-size: 20px; font-weight: 700; }}
@@ -226,7 +230,8 @@ _HTML_TMPL = """<!doctype html>
       mode <code>{mode}</code> &middot;
       audit <code>{audit_id}</code> &middot;
       {started} → {finished} &middot;
-      elapsed {elapsed}
+      elapsed {elapsed} &middot;
+      environment <code class="{env_class}">{test_environment}</code>
     </div>
     <div class="verdict {verdict_class}">{verdict_text}</div>
   </div>
@@ -297,6 +302,8 @@ def export_html(report: AuditReport, path: str | Path) -> Path:  # type: ignore[
         elapsed=html.escape(elapsed),
         verdict_class="ok" if report.enterprise_ready else "fail",
         verdict_text="ENTERPRISE READY" if report.enterprise_ready else "NOT ENTERPRISE READY",
+        test_environment=html.escape(getattr(report, "test_environment", "unknown")),
+        env_class="env-mock" if getattr(report, "test_environment", "") == "mock" else "env-live",
         trust_score=score,
         trust_score_dash=dash,
         score_colour=score_colour,
