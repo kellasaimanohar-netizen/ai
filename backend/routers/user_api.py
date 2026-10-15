@@ -1223,9 +1223,15 @@ async def execute_live_agent_test(
 
     from live_testing import scans as lt_scans
 
-    _repo_dir, _repo_err = lt_scans.resolve_repo(req.repo_path or "")
-    if _repo_err:
-        raise HTTPException(status_code=400, detail=_repo_err)
+    _repo_dir = None
+    if req.repo_path and req.repo_path.strip():
+        _repo_dir, _repo_err = lt_scans.resolve_repo(req.repo_path)
+        if _repo_err:
+            if req.openapi_url or req.endpoint_url:
+                logging.warning("Live agent repo path not accessible in this environment (%s). Proceeding with live endpoint tests.", _repo_err)
+                _repo_dir = None
+            else:
+                raise HTTPException(status_code=400, detail=_repo_err)
 
     agent_name = req.agent_name or "Live Monitored Agent"
     repo_summary = None
