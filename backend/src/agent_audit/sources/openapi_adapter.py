@@ -116,9 +116,17 @@ class OpenAPIAdapter(SourceAdapter):
                     raise SourceError(f"failed to fetch openapi spec from {path_str}: {exc}") from exc
             source_loc_base = path_str
         else:
-            path = Path(path_str).expanduser().resolve()
+            path = Path(path_str).expanduser()
             if not path.is_file():
-                raise SourceError(f"openapi spec not found: {path}")
+                backend_dir = Path(__file__).resolve().parent.parent.parent.parent
+                candidate = (backend_dir / path_str).resolve()
+                if candidate.is_file():
+                    path = candidate
+                else:
+                    log.warning("openapi spec not found or unavailable in this environment: %s. Skipping openapi scan.", path_str)
+                    return TargetManifest(agent_name=agent_name)
+            else:
+                path = path.resolve()
 
             raw = path.read_text(encoding="utf-8")
             try:

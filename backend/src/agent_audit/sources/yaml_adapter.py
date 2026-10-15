@@ -95,7 +95,19 @@ class YamlAdapter(SourceAdapter):
             capabilities=capabilities,
             slos=slos,
             security=security,
-            runbooks_dir=Path(spec["runbooks_dir"]).expanduser() if spec.get("runbooks_dir") else None,
+            runbooks_dir=(
+                Path(spec["runbooks_dir"]).expanduser()
+                if spec.get("runbooks_dir") and Path(spec["runbooks_dir"]).expanduser().is_dir()
+                else (
+                    (Path(__file__).resolve().parent.parent.parent.parent / spec["runbooks_dir"]).resolve()
+                    if spec.get("runbooks_dir") and (Path(__file__).resolve().parent.parent.parent.parent / spec["runbooks_dir"]).is_dir()
+                    else (
+                        (Path(__file__).resolve().parent.parent.parent.parent / "runbooks").resolve()
+                        if (Path(__file__).resolve().parent.parent.parent.parent / "runbooks").is_dir()
+                        else None
+                    )
+                )
+            ),
             golden_dataset=self._parse_golden(spec.get("golden_dataset")),
             compliance_frameworks=list(spec.get("compliance_frameworks") or []),
             capability_profile_raw=dict(spec.get("capability_profile") or {}),

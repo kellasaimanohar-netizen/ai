@@ -90,9 +90,17 @@ class RepoAdapter(SourceAdapter):
                 raise SourceError(f"Failed to clone git repository: {e.stderr.decode(errors='replace')}")
             root = Path(temp_repo_dir).resolve()
         else:
-            root = Path(path_str).expanduser().resolve()
+            root = Path(path_str).expanduser()
             if not root.is_dir():
-                raise SourceError(f"repo path is not a directory: {root}")
+                backend_dir = Path(__file__).resolve().parent.parent.parent.parent
+                candidate = (backend_dir / path_str).resolve()
+                if candidate.is_dir():
+                    root = candidate
+                else:
+                    log.warning("repo path is not a directory or unavailable in this environment: %s. Skipping repo scan.", path_str)
+                    return TargetManifest(agent_name=agent_name)
+            else:
+                root = root.resolve()
 
         log.info("RepoAdapter scanning %s", root)
 

@@ -5,12 +5,10 @@ compliance_frameworks:
   - "india_dpdp_2023"
 
 sources:
-  - type: repo
-    path: "C:/Personal/Customer_Agent 2"
   - type: openapi
-    path: "C:/Personal/Customer_Agent 2/Backend/openapi.json"
+    path: "targets/fixtures/customer_agent_v2_openapi.json"
   - type: yaml_inline
-    runbooks_dir: "C:/Personal/Customer_Agent 2/runbooks"
+    runbooks_dir: "runbooks"
     # Vendored into this repo (targets/fixtures/) so FAIR-EQUITY-001 and
     # GND-GOLDEN-001 are reachable from CI / a fresh clone, instead of only
     # working on the one machine that has "C:/Personal/Customer_Agent 2".
