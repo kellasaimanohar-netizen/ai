@@ -40,7 +40,9 @@ def _files() -> list[tuple[str, Path]]:
 
 
 def _checksum(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    # Normalize CRLF to LF so Windows checkouts match Linux/git baseline checksums
+    content = path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n").encode("utf-8")
+    return hashlib.sha256(content).hexdigest()[:16]
 
 
 def _connect():

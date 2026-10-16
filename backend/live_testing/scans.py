@@ -251,7 +251,7 @@ _RAW_SQL = re.compile(r"\b(?:SELECT\s+[\w\*,\s\.`\"]+\s+FROM|INSERT\s+INTO|UPDAT
 _SQL_BUILT = re.compile(r"""(?:execute|executemany|query|raw)\(\s*(?:f["']|["'][^"']*["']\s*(?:%|\+)|[^)]*\.format\()""")
 
 _DESTRUCTIVE: list[tuple[str, str, str, re.Pattern]] = [
-    ("DROP", "HIGH", "SQL that drops a table, database or index", re.compile(r"\bDROP\s+(?:TABLE|DATABASE|SCHEMA|VIEW|INDEX)\b", re.I)),
+    ("DROP", "HIGH", "SQL that drops a table, database or index", re.compile(r"\bDROP\s+(?:TABLE|DATABASE|SCHEMA|VIEW|INDEX)\s+(?:IF\s+EXISTS\s+)?[\w`\"']+", re.I)),
     ("TRUNCATE", "HIGH", "SQL that empties a table", re.compile(r"\bTRUNCATE\s+(?:TABLE\s+)?\w+", re.I)),
     ("DELETE without WHERE", "HIGH", "SQL that deletes every row in a table", re.compile(r"""\bDELETE\s+FROM\s+[\w\.\"`]+\s*(?:["'`;)]|$)""", re.I)),
     ("DELETE", "WARNING", "SQL that deletes rows", re.compile(r"\bDELETE\s+FROM\b", re.I)),
@@ -259,7 +259,7 @@ _DESTRUCTIVE: list[tuple[str, str, str, re.Pattern]] = [
     ("ORM delete", "WARNING", "Code that deletes records", re.compile(r"\.delete\(\)|session\.delete\(|\.deleteMany\(|\.destroy\(|\.deleteOne\(|\.remove_all\(|objects\.all\(\)\.delete")),
     ("Delete files", "HIGH", "Code that deletes whole folders", re.compile(r"shutil\.rmtree\(|\brm\s+-rf\b|rmdir\s+/s|fs\.rm(?:Sync)?\([^)]*recursive")),
     ("Delete file", "WARNING", "Code that deletes files", re.compile(r"\bos\.remove\(|\bos\.unlink\(|\.unlink\(|fs\.unlink(?:Sync)?\(")),
-    ("Run commands", "HIGH", "Code that runs text as code or as a shell command", re.compile(r"\beval\(|\bexec\(|os\.system\(|shell\s*=\s*True|child_process\.exec\(|Runtime\.getRuntime\(\)\.exec")),
+    ("Run commands", "HIGH", "Code that runs text as code or as a shell command", re.compile(r"(?<!['\"])\b(?:eval|exec)\s*\(|os\.system\(|shell\s*=\s*True|child_process\.exec\(|Runtime\.getRuntime\(\)\.exec")),
 ]
 
 _TOOL_DECORATORS = {"tool", "function_tool", "register_for_llm", "tool_function", "agent_tool", "kernel_function", "llm_tool", "structured_tool", "mcp_tool"}
@@ -378,10 +378,12 @@ def _scan_repo_dir(root: Path) -> dict:
             for kind, sev, desc, rx in _DESTRUCTIVE:
                 for m in rx.finditer(text):
                     line_no = _line_of(text, m.start())
+                    line = text.splitlines()[line_no - 1].strip()[:140] if line_no <= text.count("\n") + 1 else ""
+                    if line.startswith(("#", "//", "/*", "*")):
+                        continue
                     if kind == "DELETE" and any(d["kind"] == "DELETE without WHERE" and d["file"] == rels and d["line"] == line_no for d in destructive):
                         continue
                     if len([d for d in destructive if d["kind"] == kind]) < MAX_PER_KIND:
-                        line = text.splitlines()[line_no - 1].strip()[:140] if line_no <= text.count("\n") + 1 else ""
                         destructive.append({"kind": kind, "severity": "INFO" if low else sev, "meaning": desc, "file": rels, "line": line_no, "code": line})
 
         # tools and routes
