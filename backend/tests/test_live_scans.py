@@ -140,3 +140,13 @@ def test_folders_outside_the_base_stay_blocked_on_vercel(tmp_path, monkeypatch):
     sneaky.mkdir()
     assert "must be inside" in scans.scan_repo(str(tmp_path))["error"]
     assert "must be inside" in scans.scan_repo(str(sneaky))["error"]
+
+
+def test_a_variable_name_is_not_reported_as_a_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv("AA_REPO_BASE", str(tmp_path))
+    (tmp_path / "agent_manifest.yaml").write_text('auth: { type: bearer, token_env: "AGENT_API_TOKEN" }\n')
+    (tmp_path / "app.py").write_text('api_token = "q8Zr3LmX0vPk7WnT"\n')
+    found = [f for f in scans.scan_repo(str(tmp_path))["findings"] if f["category"] == "Hardcoded secrets"]
+    locations = [loc for f in found for loc in f["locations"]]
+    assert any("app.py" in loc for loc in locations)
+    assert not any("agent_manifest.yaml" in loc for loc in locations)

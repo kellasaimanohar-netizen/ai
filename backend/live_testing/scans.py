@@ -281,6 +281,8 @@ _SECRET_ASSIGN = re.compile(
     r"""(?i)\b([A-Za-z0-9_.\-]*(?:password|passwd|pwd|secret|api[_\-]?key|apikey|auth[_\-]?token|access[_\-]?token|private[_\-]?key|client[_\-]?secret|token)[A-Za-z0-9_.\-]*)["']?\s*[:=]\s*["']([^"'\n]{8,})["']""")
 _SKIP_KEY = re.compile(r"(?i)(url|path|name|file|header|type|expire|algorithm|endpoint|label|prefix|field|description|hint|placeholder|example|schema|class|format|encoding)")
 _PLACEHOLDER = re.compile(r"(?i)(example|changeme|change_me|your[_\-\s]|xxx|\*\*\*|<|>|\{\{|\$\{|\$\(|replace|placeholder|dummy|sample|todo|secret_here|token_here|not[_\-]?set|insert|enter[_\-\s]|my[_\-]?(?:secret|key|token)|\bnone\b|\bnull\b|password$)")
+_ENV_NAME_KEY = re.compile(r"(?i)(?:^|_)(?:env|env_?var|var)$")   # token_env: "AGENT_API_TOKEN" names a variable, it is not the secret
+_ENV_NAME_VALUE = re.compile(r"^[A-Z][A-Z0-9_]{2,}$")
 _ENV_LOOKUP = re.compile(r"os\.environ|getenv|process\.env|environ\.get|config\(|settings\.|import\.meta\.env|\.env\[|ENV\[")
 
 
@@ -411,7 +413,7 @@ def _scan_repo_dir(root: Path) -> dict:
             for m in _SECRET_ASSIGN.finditer(text):
                 key, val = m.group(1), m.group(2)
                 line_text = text[text.rfind("\n", 0, m.start()) + 1:text.find("\n", m.end()) if text.find("\n", m.end()) != -1 else len(text)]
-                if _SKIP_KEY.search(key) or _is_placeholder(val) or _ENV_LOOKUP.search(line_text) or val.startswith(("http://", "https://", "/", "./")):
+                if (_ENV_NAME_KEY.search(key) and _ENV_NAME_VALUE.match(val)) or _SKIP_KEY.search(key) or _is_placeholder(val) or _ENV_LOOKUP.search(line_text) or val.startswith(("http://", "https://", "/", "./")):
                     continue
                 secrets.append({"kind": f"Hardcoded value for {key}", "file": rels, "line": _line_of(text, m.start()), "value": mask(val), "severity": "INFO" if low else "HIGH"})
     for c in conn_strings:
