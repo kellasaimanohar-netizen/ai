@@ -130,3 +130,13 @@ def test_combined_findings_link_the_code_and_the_description(repo):
     titles = [f["title"] for f in combined]
     assert "Database-backed routes are open to anyone" in titles
     assert "The code has delete routes and the API declares no login" in titles
+
+
+def test_folders_outside_the_base_stay_blocked_on_vercel(tmp_path, monkeypatch):
+    monkeypatch.setenv("AA_REPO_BASE", str(tmp_path / "base"))
+    monkeypatch.setenv("VERCEL", "1")
+    (tmp_path / "base").mkdir()
+    sneaky = tmp_path / "agent_audit_git_x"
+    sneaky.mkdir()
+    assert "must be inside" in scans.scan_repo(str(tmp_path))["error"]
+    assert "must be inside" in scans.scan_repo(str(sneaky))["error"]

@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import os
 import re
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,29 @@ def allowed_repo_base() -> Path:
     return Path(env).resolve() if env else Path(__file__).resolve().parents[3]
 
 
+def remove_clone(path) -> None:
+    """Delete a temporary clone. Git makes some files read-only, which Windows refuses to delete, so clear that first."""
+    import shutil
+    import stat
+
+    def _retry(func, target, _exc):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    if not os.path.exists(path):
+        return
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_retry)
+    else:
+        shutil.rmtree(path, onerror=_retry)
+
+
+def _is_our_clone(p: Path) -> bool:
+    """True only for a folder this backend cloned itself: directly in the temp folder, named agent_audit_git_*."""
+    import tempfile
+    return p.parent == Path(tempfile.gettempdir()).resolve() and p.name.startswith("agent_audit_git_")
+
+
 def resolve_repo(path: str) -> tuple[Path | None, str | None]:
     """The folder to scan, or an error message in plain words. Supports local paths and git URLs."""
     raw = (path or "").strip().strip('"').strip("'")
@@ -62,7 +86,7 @@ def resolve_repo(path: str) -> tuple[Path | None, str | None]:
             return Path(temp_dir).resolve(), None
         except Exception as e:
             try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                remove_clone(temp_dir)
             except Exception:
                 pass
             err_msg = str(e)
@@ -81,7 +105,7 @@ def resolve_repo(path: str) -> tuple[Path | None, str | None]:
     try:
         p.relative_to(base)
     except ValueError:
-        if os.environ.get("VERCEL") or "agent_audit_git_" in str(p):
+        if _is_our_clone(p):
             return p, None
         return None, f"The repository folder must be inside {base}. Move it there, or set AA_REPO_BASE on the backend."
     return p, None
@@ -488,8 +512,7 @@ def scan_repo(path: str) -> dict:
         return res
     finally:
         if is_cloned_here:
-            import shutil
-            shutil.rmtree(root, ignore_errors=True)
+            remove_clone(root)
 
 
 # ---------------------------------------------------------------------------------------------

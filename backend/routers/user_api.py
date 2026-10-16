@@ -1196,8 +1196,7 @@ async def discover_live_agent(req: LiveDiscoverRequest, current_user: dict = Dep
             }
         finally:
             if is_temp and rp:
-                import shutil
-                shutil.rmtree(rp, ignore_errors=True)
+                lt_scans.remove_clone(rp)
     else:
         raise HTTPException(status_code=400, detail="Invalid source_type. Must be 'openapi' or 'repo'.")
 
@@ -1245,8 +1244,7 @@ async def execute_live_agent_test(
         return await _execute_live_agent_test_inner(req, auth_user, user_id, _repo_dir, _temp_repo, started_at)
     finally:
         if _temp_repo and _repo_dir:
-            import shutil
-            shutil.rmtree(_repo_dir, ignore_errors=True)
+            lt_scans.remove_clone(_repo_dir)
 
 
 async def _execute_live_agent_test_inner(
