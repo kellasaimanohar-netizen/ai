@@ -150,3 +150,16 @@ def test_a_variable_name_is_not_reported_as_a_secret(tmp_path, monkeypatch):
     locations = [loc for f in found for loc in f["locations"]]
     assert any("app.py" in loc for loc in locations)
     assert not any("agent_manifest.yaml" in loc for loc in locations)
+
+
+def test_the_prompt_goes_into_the_field_the_openapi_declares():
+    import json
+    from live_testing import packs
+    spec = {"paths": {"/agent/invoke": {"post": {"requestBody": {"content": {"application/json": {
+        "schema": {"$ref": "#/components/schemas/AgentRequest"}}}}}}},
+        "components": {"schemas": {"AgentRequest": {"required": ["input"], "properties": {
+            "input": {"type": "string"}, "session_id": {"type": "string"}}}}}}
+    assert json.loads(packs.chat_template_from_openapi(spec, "/agent/invoke", "POST")) == {"input": "{PROMPT}"}
+    no_text = {"paths": {"/calc": {"post": {"requestBody": {"content": {"application/json": {
+        "schema": {"properties": {"amount": {"type": "number"}}}}}}}}}}
+    assert packs.chat_template_from_openapi(no_text, "/calc", "POST") is None

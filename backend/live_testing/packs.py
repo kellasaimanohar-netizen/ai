@@ -13,6 +13,7 @@ A test case is a plain dict so it can be stored, sent over the API and edited in
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 AGENT_TYPES: dict[str, dict[str, Any]] = {
@@ -442,6 +443,27 @@ def _valid_value(schema: dict) -> Any:
     if t == "array":
         return []
     return "sample"
+
+
+_PROMPT_FIELDS = ("input", "message", "prompt", "query", "question", "text", "content", "user_input", "msg")
+
+
+def chat_template_from_openapi(spec: dict | None, path: str, method: str) -> str | None:
+    """The request body the route declares, with its text field set to {PROMPT}, or None when it has no
+    string field. So an agent that reads `input` is sent `input`, not a guessed `message`."""
+    if not spec or not path:
+        return None
+    op = (spec.get("paths", {}).get(path, {}) or {}).get((method or "post").lower(), {}) or {}
+    body_schema = _resolve(spec, (((op.get("requestBody") or {}).get("content") or {}).get("application/json") or {}).get("schema") or {})
+    props: dict[str, dict] = {k: _resolve(spec, v) for k, v in (body_schema.get("properties") or {}).items()}
+    strings = [k for k, v in props.items() if v.get("type") == "string" and not v.get("enum")]
+    if not strings:
+        return None
+    required = list(body_schema.get("required") or [])
+    field = next((k for name in _PROMPT_FIELDS for k in strings if k.lower() == name), None)         or next((k for k in strings if k in required), strings[0])
+    body: dict[str, Any] = {k: _valid_value(props.get(k, {})) for k in required if k != field}
+    body[field] = "{PROMPT}"
+    return json.dumps(body)
 
 
 def api_cases_from_openapi(spec: dict, path: str, method: str) -> list[dict]:

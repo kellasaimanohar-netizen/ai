@@ -1424,9 +1424,12 @@ async def _execute_live_agent_test_inner(
         cfg_kwargs["job_id_path"] = req.job_id_path
     if req.status_path:
         cfg_kwargs["status_path"] = req.status_path
+    request_template = req.payload_template
+    if not (request_template or "").strip() and discovered_spec and discovered_route and connector_kind != "openai":
+        request_template = lt_packs.chat_template_from_openapi(discovered_spec, discovered_route[0], method_used)
     connector_cfg = ConnectorConfig(
         kind=connector_kind, endpoint_url=clean_endpoint, http_method=method_used, headers=headers,
-        request_template=req.payload_template, response_path=req.response_path,
+        request_template=request_template, response_path=req.response_path,
         timeout_seconds=max(3.0, min(float(req.timeout_seconds or 20.0), 45.0)), model=req.model, **cfg_kwargs,
     )
 
@@ -1466,7 +1469,7 @@ async def _execute_live_agent_test_inner(
         raise HTTPException(status_code=400, detail="There are no tests to run. Add golden cases, or turn the built-in pack on.")
 
     total_start = time.perf_counter()
-    suite = await run_suite(connector_cfg, active_cases, repeats=req.repeats, use_ai_judge=req.use_ai_judge, analyzer=_analyze_agent_response)
+    suite = await run_suite(connector_cfg, active_cases, repeats=req.repeats, use_ai_judge=req.use_ai_judge, analyzer=_analyze_agent_response, concurrency=6)
     test_results = suite["test_results"]
     all_findings = suite["all_findings"]
     sc = dict(suite["score"])
