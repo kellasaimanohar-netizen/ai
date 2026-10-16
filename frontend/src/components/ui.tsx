@@ -252,14 +252,14 @@ export const Modal: React.FC<{
   }, [open, onClose]);
   if (!open) return null;
   return createPortal(
-    <div className="modal-layer" style={width ? { paddingTop: '2vh', paddingBottom: '2vh' } : undefined} onPointerDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="modal-layer" style={width ? { paddingTop: '5vh', paddingBottom: '5vh' } : undefined} onPointerDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div
         ref={ref}
         className={`modal ${size === 'lg' ? 'modal-lg' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        style={width ? { maxWidth: width, maxHeight: '96vh' } : undefined}
+        style={width ? { maxWidth: width, maxHeight: '90vh' } : undefined}
       >
         <div className="modal-head" style={width ? { borderBottom: '1px solid var(--color-border)', paddingBottom: 16 } : undefined}>
           <div style={{ minWidth: 0 }}>

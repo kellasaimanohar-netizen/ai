@@ -857,7 +857,7 @@ export const UserLiveAgents: React.FC<UserLiveAgentsProps> = () => {
       <Modal
         open={!!detail}
         onClose={() => setSelectedAgentDetail(null)}
-        width={1400}
+        width={1100}
         title={detail ? (
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             {detail.name}
