@@ -416,11 +416,7 @@ export const UserLiveAgents: React.FC<UserLiveAgentsProps> = () => {
   const handleAddNewAgentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRepoPath.trim()) {
-      setAddModalError('The repository folder is required. Clone the repo to a folder on this computer and enter that folder.');
-      return;
-    }
-    if (/^(https?:\/\/|git@)/i.test(newRepoPath.trim())) {
-      setAddModalError('A GitHub web address cannot be read. Clone the repository to a folder and enter that folder.');
+      setAddModalError('Enter the repository: a GitHub link or a folder on the server.');
       return;
     }
     if (!newOpenapiUrl.trim()) {
@@ -827,8 +823,8 @@ export const UserLiveAgents: React.FC<UserLiveAgentsProps> = () => {
             <input type="text" className="form-input mono" value={newOpenapiUrl} onChange={e => setNewOpenapiUrl(e.target.value)} placeholder="https://your-agent.example.com/openapi.json" />
           </Field>
 
-          <Field label="Repository folder" required hint="A folder on this computer with the agent's code. GitHub links do not work: clone the repository first.">
-            <input type="text" className="form-input mono" value={newRepoPath} onChange={e => setNewRepoPath(e.target.value)} placeholder="C:\your-folder\your-agent" />
+          <Field label="Repository" required hint="A GitHub link to the agent's code (public repos). It is copied for the test and deleted afterwards. A folder on the server also works.">
+            <input type="text" className="form-input mono" value={newRepoPath} onChange={e => setNewRepoPath(e.target.value)} placeholder="https://github.com/your-org/your-agent" />
           </Field>
 
           <LiveTestSettings value={newConfig} onChange={patch => setNewConfig(prev => ({ ...prev, ...patch }))} />

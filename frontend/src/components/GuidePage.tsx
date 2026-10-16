@@ -246,7 +246,7 @@ const USER_SECTIONS: Section[] = [
         <p>Use <strong>Live agents → New agent</strong> for an agent that is already running.</p>
         <ol className="guide-steps">
           <li>Enter the OpenAPI document URL and press <strong>Test connection</strong> to check it can be read. Nothing is saved yet.</li>
-          <li>Enter the repository folder on this computer. A GitHub web address does not work here: clone the repository first.</li>
+          <li>Enter the agent's GitHub link. The code is copied for the test and deleted when the test ends. A folder on the server also works.</li>
           <li>Leave <strong>Monitor this agent around the clock</strong> on to keep checking it. Health checks run every 1, 5, 15 or 60 minutes; a full test can run every 6 hours, day or week.</li>
           <li>The agent type, endpoint and response format are detected from the OpenAPI spec.</li>
           <li>Add an API token if the agent needs one. It is stored on the server and never shown again.</li>
